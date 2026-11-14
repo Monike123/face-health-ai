@@ -1,6 +1,6 @@
 # FaceHealth — Have vs Remaining
 
-Last update: 2026-10-14
+Last update: 2026-11-14
 
 ## Have (done)
 
@@ -15,7 +15,23 @@ Last update: 2026-10-14
 | PhysNet smoke trainer | Done | `python -m facehealth.deep_learning.train_physnet` |
 | Classical benchmark harness | Done | `python -m facehealth.evaluation.benchmark_pos` |
 | Dataset guide + request emails | Done | `docs/datasets/` |
-| SCAMPS open download script | In progress / script ready | `python scripts/datasets/download_scamps_example.py` |
+| SCAMPS open download script | Done | `data/raw/SCAMPS/` |
+| Web v0.1 Beta (API + Next.js scan UI) | Local demo working | see below |
+
+### Local web demo (no Clerk)
+
+```powershell
+# Terminal 1
+$env:FACEHEALTH_DEV_AUTH='1'
+.\.venv\Scripts\python.exe -m uvicorn facehealth.api.app:app --host 127.0.0.1 --port 8000 --app-dir src
+
+# Terminal 2
+cd web
+npm run dev
+```
+
+Open http://127.0.0.1:3000 → Start a scan. `NEXT_PUBLIC_DEV_AUTH=1` is in `web/.env.local`.
+Turn both DEV_AUTH flags off before any public/Vercel deploy; then use Clerk keys.
 
 ## Remaining (blocked on you / later milestones)
 

@@ -61,9 +61,28 @@ def test_scan_rejects_bad_payload(client: TestClient, mutate) -> None:  # type: 
 
 def test_scan_requires_auth(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CLERK_SECRET_KEY", "test_dummy_not_a_real_key")
+    monkeypatch.delenv("FACEHEALTH_DEV_AUTH", raising=False)
     monkeypatch.delenv("VERCEL", raising=False)
     r = TestClient(app).post("/api/v1/scan", json=_payload())
     assert r.status_code == 401
+
+
+def test_dev_auth_bypass(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FACEHEALTH_DEV_AUTH", "1")
+    monkeypatch.delenv("VERCEL", raising=False)
+    monkeypatch.delenv("CLERK_SECRET_KEY", raising=False)
+    r = TestClient(app).post("/api/v1/scan", json=_payload())
+    assert r.status_code == 200
+    assert abs(r.json()["hr_bpm"] - 72.0) < 3.0
+
+
+def test_dev_auth_blocked_on_vercel(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FACEHEALTH_DEV_AUTH", "1")
+    monkeypatch.setenv("VERCEL", "1")
+    monkeypatch.delenv("CLERK_SECRET_KEY", raising=False)
+    monkeypatch.delenv("ALLOWED_ORIGINS", raising=False)
+    r = TestClient(app).post("/api/v1/scan", json=_payload())
+    assert r.status_code == 503
 
 
 def test_health() -> None:

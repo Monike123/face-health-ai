@@ -1,13 +1,25 @@
-import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
+import { NextResponse } from "next/server";
+import type { NextRequest } from "next/server";
 
-const isProtected = createRouteMatcher(["/scan(.*)"]);
+const DEV = process.env.NEXT_PUBLIC_DEV_AUTH === "1";
 
-export default clerkMiddleware(
-  async (auth, req) => {
-    if (isProtected(req)) await auth.protect();
-  },
-  { signInUrl: "/sign-in", signUpUrl: "/sign-up" },
-);
+async function clerkProxy(request: NextRequest) {
+  const { clerkMiddleware, createRouteMatcher } = await import("@clerk/nextjs/server");
+  const isProtected = createRouteMatcher(["/scan(.*)"]);
+  const handler = clerkMiddleware(
+    async (auth, req) => {
+      if (isProtected(req)) await auth.protect();
+    },
+    { signInUrl: "/sign-in", signUpUrl: "/sign-up" },
+  );
+  // clerkMiddleware returns a Next.js middleware function
+  return handler(request, {} as never);
+}
+
+export default async function proxy(request: NextRequest) {
+  if (DEV) return NextResponse.next();
+  return clerkProxy(request);
+}
 
 export const config = {
   matcher: [
