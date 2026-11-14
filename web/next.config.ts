@@ -22,12 +22,6 @@ const nextConfig: NextConfig = {
       },
     ];
   },
-  async rewrites() {
-    // On Vercel, vercel.json routes /api/v1/* to the Python service; locally uvicorn runs on :8000.
-    return process.env.NODE_ENV === "development"
-      ? [{ source: "/api/v1/:path*", destination: "http://127.0.0.1:8000/api/v1/:path*" }]
-      : [];
-  },
 };
 
 export default nextConfig;

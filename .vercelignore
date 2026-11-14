@@ -1,11 +1,7 @@
 .venv
 data
 models
-web/node_modules
-web/.next
 .mypy_cache
 .ruff_cache
-.pytest_cache
 **/__pycache__
-*.egg-info
 cursor_plan_review_suggestions.md
