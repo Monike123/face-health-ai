@@ -1,34 +1,33 @@
-# FaceHealth-rPPG
+# FaceHealth AI
 
-Contactless rPPG **wellness** toolkit: estimate pulse-related signals from face video.
+Contactless rPPG **wellness** toolkit: estimate heart rate from a 30-second face scan.
 
 > **Not a medical device.** Not for diagnosis, screening, or treatment decisions.
 
-## Status
-- Plans: [`MASTER_PLAN.md`](MASTER_PLAN.md) v2.0, [`task_plan.md`](task_plan.md)
-- Implementation: **M0 foundation** (package scaffold, config, logging, CI, docs)
-- Next: **M1** walking skeleton — webcam → FaceLandmarker → ROI → POS → HR
+**Repo:** https://github.com/Monike123/face-health-ai
 
-## Quick start (Windows)
+## Web Beta (local)
 ```powershell
-cd c:\Users\Manas\Desktop\Face_health
+# web/.env.local must contain: NEXT_PUBLIC_DEV_AUTH=1
+cd web
+npm install
+npm run dev
+```
+Open http://127.0.0.1:3000 → Start a scan. Desktop HUD still works: `python -m facehealth --live`.
+
+## Deploy to Vercel (one-time)
+1. Open: https://vercel.com/new/import?s=https://github.com/Monike123/face-health-ai
+2. Set **Root Directory** to `web`
+3. Add env var: `NEXT_PUBLIC_DEV_AUTH` = `1` (Beta without Clerk; turn off later and add Clerk keys)
+4. Deploy
+
+## Desktop / Python
+```powershell
 .\.venv\Scripts\Activate.ps1
 pip install -e ".[dev]"
-pip install mediapipe
-python scripts\download_face_landmarker.py
 pytest -q
 python -m facehealth --live
 ```
-Press `q` to quit the HUD. Wellness only — not for diagnosis.
-
-## Layout
-See `src/facehealth/` packages. Runtime config: `configs/config.yaml`.
 
 ## License / datasets
-See [`docs/soup_register.md`](docs/soup_register.md), [`docs/datasets/GUIDE.md`](docs/datasets/GUIDE.md), and request templates in [`docs/datasets/REQUEST_EMAILS.md`](docs/datasets/REQUEST_EMAILS.md).
-
-```powershell
-# Open synthetic starter (~1.2 GB)
-python scripts\datasets\download_scamps_example.py
-python scripts\datasets\verify_dataset.py --name scamps
-```
+See [`docs/soup_register.md`](docs/soup_register.md), [`docs/datasets/GUIDE.md`](docs/datasets/GUIDE.md).
