@@ -1,0 +1,10 @@
+# PhysNet smoke / full-train defaults
+frames: 64
+height: 36
+width: 36
+batch_size: 2
+epochs_smoke: 3
+lr: 0.001
+# Full train (cloud): raise frames to 128, height/width 72+, epochs 30+
+device: auto
+checkpoint: models/checkpoints/physnet_smoke.pt

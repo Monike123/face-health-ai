@@ -1,0 +1,8 @@
+# Server runtime for the Vercel FastAPI function (api/index.py) only.
+# Local dev installs come from pyproject.toml: pip install -e ".[dev,api]" (+ ".[ml]").
+numpy>=1.26,<3
+scipy>=1.12,<2
+pydantic>=2.6,<3
+PyYAML>=6.0,<7
+fastapi>=0.110
+clerk-backend-api>=1.0

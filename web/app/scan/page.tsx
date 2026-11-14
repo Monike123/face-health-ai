@@ -1,0 +1,318 @@
+"use client";
+
+import { useAuth } from "@clerk/nextjs";
+import { FaceLandmarker, FilesetResolver } from "@mediapipe/tasks-vision";
+import { useEffect, useRef, useState } from "react";
+import { meanRoiRgb, roiPolygons } from "@/lib/roi";
+
+const SCAN_SECONDS = 30;
+const MP_VERSION = "1.2.3"; // keep equal to @mediapipe/tasks-vision in package.json
+const WASM_URL = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP_VERSION}/wasm`;
+const MODEL_URL =
+  "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task";
+const W = 320;
+const H = 240;
+
+type Phase = "consent" | "loading" | "ready" | "scanning" | "processing" | "result" | "error";
+type Result = { hr_bpm: number | null; quality: "good" | "low"; message: string; disclaimer: string };
+type Samples = { t: number[]; rgb: [number, number, number][]; missed: number; start: number | null };
+
+const btn = "rounded-md px-4 py-2 font-medium disabled:opacity-40";
+
+async function createLandmarker(): Promise<FaceLandmarker> {
+  const fileset = await FilesetResolver.forVisionTasks(WASM_URL);
+  const make = (delegate: "GPU" | "CPU") =>
+    FaceLandmarker.createFromOptions(fileset, {
+      baseOptions: { modelAssetPath: MODEL_URL, delegate },
+      runningMode: "VIDEO",
+      numFaces: 1,
+    });
+  try {
+    return await make("GPU");
+  } catch {
+    return make("CPU");
+  }
+}
+
+function cameraError(e: unknown): string {
+  const name = e instanceof DOMException ? e.name : "";
+  if (name === "NotAllowedError")
+    return "Camera permission was denied. Allow camera access in your browser settings and try again.";
+  if (name === "NotFoundError" || name === "OverconstrainedError") return "No usable camera was found.";
+  if (name === "NotReadableError") return "Your camera is being used by another app. Close it and try again.";
+  return "Could not start the camera or load the face model. Check your connection and try again.";
+}
+
+export default function ScanPage() {
+  const { getToken } = useAuth();
+  const [phase, setPhase] = useState<Phase>("consent");
+  const [agreed, setAgreed] = useState(false);
+  const [faceFound, setFaceFound] = useState(false);
+  const [secondsLeft, setSecondsLeft] = useState(SCAN_SECONDS);
+  const [result, setResult] = useState<Result | null>(null);
+  const [error, setError] = useState("");
+
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const overlayRef = useRef<HTMLCanvasElement>(null);
+  const landmarkerRef = useRef<FaceLandmarker | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const loopRef = useRef(0);
+  const faceRef = useRef(false);
+  const scanningRef = useRef(false);
+  const samplesRef = useRef<Samples>({ t: [], rgb: [], missed: 0, start: null });
+
+  useEffect(() => {
+    const loop = loopRef;
+    const stream = streamRef;
+    const landmarker = landmarkerRef;
+    return () => {
+      loop.current++;
+      stream.current?.getTracks().forEach((t) => t.stop());
+      landmarker.current?.close();
+    };
+  }, []);
+
+  function stopCamera() {
+    loopRef.current++;
+    scanningRef.current = false;
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+    streamRef.current = null;
+  }
+
+  function fail(msg: string) {
+    stopCamera();
+    setError(msg);
+    setPhase("error");
+  }
+
+  async function startCamera() {
+    setPhase("loading");
+    setError("");
+    setResult(null);
+    try {
+      landmarkerRef.current ??= await createLandmarker();
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: 640, height: 480, facingMode: "user" },
+        audio: false,
+      });
+      streamRef.current = stream;
+      const video = videoRef.current!;
+      video.srcObject = stream;
+      await video.play();
+      setPhase("ready");
+      startLoop();
+    } catch (e) {
+      fail(cameraError(e));
+    }
+  }
+
+  function startLoop() {
+    const id = ++loopRef.current;
+    const frame = Object.assign(document.createElement("canvas"), { width: W, height: H });
+    const mask = Object.assign(document.createElement("canvas"), { width: W, height: H });
+    const frameCtx = frame.getContext("2d", { willReadFrequently: true })!;
+    const maskCtx = mask.getContext("2d", { willReadFrequently: true })!;
+    let lastVideoTime = -1;
+
+    const schedule = (cb: (now: number) => void) => {
+      const v = videoRef.current;
+      if (v && "requestVideoFrameCallback" in v) v.requestVideoFrameCallback((now) => cb(now));
+      else requestAnimationFrame(cb);
+    };
+
+    const tick = (now: number) => {
+      const video = videoRef.current;
+      const lm = landmarkerRef.current;
+      const overlay = overlayRef.current;
+      if (id !== loopRef.current || !video || !lm || !overlay) return;
+      if (video.currentTime === lastVideoTime) return schedule(tick);
+      lastVideoTime = video.currentTime;
+
+      const face = lm.detectForVideo(video, now).faceLandmarks[0];
+      const octx = overlay.getContext("2d")!;
+      octx.clearRect(0, 0, W, H);
+      let rgb: [number, number, number] | null = null;
+      if (face) {
+        const polys = roiPolygons(face, W, H);
+        octx.strokeStyle = "#4ade80";
+        octx.lineWidth = 1.5;
+        for (const poly of polys) {
+          octx.beginPath();
+          poly.forEach((p, i) => (i === 0 ? octx.moveTo(p.x, p.y) : octx.lineTo(p.x, p.y)));
+          octx.closePath();
+          octx.stroke();
+        }
+        if (scanningRef.current) {
+          frameCtx.drawImage(video, 0, 0, W, H);
+          rgb = meanRoiRgb(frameCtx, maskCtx, polys);
+        }
+      }
+      if (!!face !== faceRef.current) {
+        faceRef.current = !!face;
+        setFaceFound(!!face);
+      }
+
+      if (scanningRef.current) {
+        const s = samplesRef.current;
+        s.start ??= now;
+        if (rgb) {
+          s.t.push(now);
+          s.rgb.push(rgb);
+        } else {
+          s.missed++;
+        }
+        const elapsed = (now - s.start) / 1000;
+        setSecondsLeft(Math.max(0, Math.ceil(SCAN_SECONDS - elapsed)));
+        if (elapsed >= SCAN_SECONDS) {
+          void submit();
+          return;
+        }
+      }
+      schedule(tick);
+    };
+    schedule(tick);
+  }
+
+  function beginScan() {
+    samplesRef.current = { t: [], rgb: [], missed: 0, start: null };
+    setSecondsLeft(SCAN_SECONDS);
+    scanningRef.current = true;
+    setPhase("scanning");
+  }
+
+  async function submit() {
+    stopCamera();
+    setPhase("processing");
+    const s = samplesRef.current;
+    if (s.missed > 0.2 * (s.t.length + s.missed))
+      return fail("Your face was not visible for much of the scan. Keep your face centred and try again.");
+    if (s.t.length < 300)
+      return fail("Your device processed too few frames. Close other apps or tabs and try again.");
+    try {
+      const token = await getToken();
+      const t0 = s.t[0];
+      const res = await fetch("/api/v1/scan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ t_ms: s.t.map((t) => t - t0), rgb: s.rgb }),
+      });
+      if (res.status === 401) return fail("Your session expired. Please sign in again.");
+      if (!res.ok)
+        return fail(
+          res.status === 422
+            ? "The scan data was not usable. Please try again."
+            : "Server error. Please try again in a moment.",
+        );
+      setResult(await res.json());
+      setPhase("result");
+    } catch {
+      fail("Network error. Check your connection and try again.");
+    }
+  }
+
+  const showCamera = phase === "loading" || phase === "ready" || phase === "scanning";
+
+  return (
+    <div className="space-y-5">
+      <h1 className="text-2xl font-bold">30-second scan</h1>
+
+      {phase === "consent" && (
+        <div className="space-y-4">
+          <ul className="list-disc space-y-1 pl-5 text-sm">
+            <li>Sit in even, steady light (no strong light behind you).</li>
+            <li>Keep your face centred, stay still, and do not talk during the scan.</li>
+            <li>Your video stays on your device. Only colour averages are sent, and nothing is stored.</li>
+          </ul>
+          <label className="flex items-start gap-2 text-sm">
+            <input
+              type="checkbox"
+              className="mt-1"
+              checked={agreed}
+              onChange={(e) => setAgreed(e.target.checked)}
+            />
+            I understand this is a wellness estimate, not a medical measurement, and should not be
+            used for medical decisions.
+          </label>
+          <button
+            className={`${btn} bg-foreground text-background`}
+            disabled={!agreed}
+            onClick={startCamera}
+          >
+            Start camera
+          </button>
+        </div>
+      )}
+
+      <div className={showCamera ? "space-y-3" : "hidden"}>
+        <div className="relative -scale-x-100 overflow-hidden rounded-md bg-black">
+          <video ref={videoRef} playsInline muted className="block w-full" />
+          <canvas ref={overlayRef} width={W} height={H} className="absolute inset-0 h-full w-full" />
+        </div>
+
+        {phase === "loading" && <p>Starting camera and loading the face model...</p>}
+
+        {phase === "ready" && (
+          <div className="space-y-3">
+            <p>{faceFound ? "Face detected. Get comfortable and hold still." : "No face found. Centre your face in the frame."}</p>
+            <button
+              className={`${btn} bg-foreground text-background`}
+              disabled={!faceFound}
+              onClick={beginScan}
+            >
+              Start 30-second scan
+            </button>
+          </div>
+        )}
+
+        {phase === "scanning" && (
+          <div className="space-y-2" aria-live="polite">
+            <p>
+              Hold still... <strong>{secondsLeft}s</strong> left
+              {!faceFound && " (face not found, move back into view)"}
+            </p>
+            <div className="h-2 w-full rounded bg-foreground/10">
+              <div
+                className="h-2 rounded bg-green-500 transition-all"
+                style={{ width: `${((SCAN_SECONDS - secondsLeft) / SCAN_SECONDS) * 100}%` }}
+              />
+            </div>
+          </div>
+        )}
+      </div>
+
+      {phase === "processing" && <p aria-live="polite">Calculating your estimate...</p>}
+
+      {phase === "result" && result && (
+        <div className="space-y-3 rounded-md border p-5" aria-live="polite">
+          {result.hr_bpm !== null ? (
+            <>
+              <p className="text-sm opacity-70">Estimated heart rate</p>
+              <p className="text-5xl font-bold">
+                {Math.round(result.hr_bpm)} <span className="text-xl font-normal">BPM</span>
+              </p>
+              <p className="text-sm">Signal quality: Good</p>
+            </>
+          ) : (
+            <>
+              <p className="text-lg font-semibold">We could not get a clear reading</p>
+              <p className="text-sm">Signal quality: Low. {result.message}</p>
+            </>
+          )}
+          <p className="text-xs opacity-70">{result.disclaimer}</p>
+          <button className={`${btn} border`} onClick={startCamera}>
+            Scan again
+          </button>
+        </div>
+      )}
+
+      {phase === "error" && (
+        <div className="space-y-3" role="alert">
+          <p className="text-red-600">{error}</p>
+          <button className={`${btn} border`} onClick={startCamera}>
+            Try again
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}

@@ -1,0 +1,33 @@
+---
+description: Global project architecture, core tech stack, and primary terminal commands
+alwaysApply: true
+---
+
+# FaceHealth-rPPG Global Rules
+
+## Summary
+Contactless facial rPPG wellness toolkit estimating heart rate and physiological signals from video via classical DSP (`POS`/`CHROM`) and 3D-CNN/`ONNX` models, strictly scoped to non-diagnostic wellness use.
+
+## Core Tech Stack
+- **Language & Layout**: Python 3.12+ (`src` layout under `src/facehealth/`).
+- **Vision & Landmarks**: OpenCV (`opencv-python` GUI dev; never install alongside `opencv-python-headless`) + MediaPipe `FaceLandmarker` (478-point mesh, Apache-2.0).
+- **Signal Processing**: NumPy >= 1.26, SciPy >= 1.12 (Butterworth filter bank, Welch PSD).
+- **Deep Learning & Edge**: PyTorch >= 2.2 (`PhysNet` 3D-CNN, AMP), ONNX Runtime >= 1.17.
+- **Config & API**: Pydantic v2 + PyYAML (`configs/config.yaml`), FastAPI + Uvicorn.
+- **Tooling**: `pytest`, `ruff` (line-length 100, `E,F,I,UP,B`), strict `mypy`.
+
+## Terminal Commands (PowerShell)
+- **Activate**: `.\.venv\Scripts\Activate.ps1`
+- **Install**: `pip install -e ".[dev]"` and `pip install -e ".[ml]"`
+- **Build / Smoke Check**: `python -m facehealth.deep_learning.train_physnet --epochs 3` and `python -m facehealth.evaluation.benchmark_pos`
+- **Run Live HUD**: `python -m facehealth --live`
+- **Test**: `pytest -q`
+- **Lint & Typecheck**: `ruff check src tests && mypy src/facehealth`
+
+## Workflow Stop Conditions
+1. **Broken QA Gate**: Stop and fix immediately if `pytest -q`, `ruff check src tests`, or `mypy src/facehealth` returns non-zero.
+2. **Banned Licenses**: Stop before adding any AGPL dependency (`ultralytics`/YOLO is forbidden) or unrecorded library; update `docs/soup_register.md` on approved additions.
+3. **Dataset & Weight Contamination**: Stop before training commercial/shippable weights on research-only datasets (`MMPD`, `COHFACE`) or mixing subjects across train/val/test splits.
+4. **Gated Datasets**: Do not attempt automated scraping of gated datasets (`UBFC-rPPG`, `PURE`, `COHFACE`, `MMPD`); user must request access via `docs/datasets/REQUEST_EMAILS.md`.
+5. **Medical Claim Creep**: Never add diagnostic, screening, or clinical language; enforce `intended_use: Literal["wellness"]` (ADR-001) and keep backlog flags (`evm`, `blood_pressure`, `spo2`, `deepphys`, `physformer`, `phase_net`, `ttt`) `false` until milestone sign-off.
+6. **Milestone Ordering**: Enforce `M0 -> M1 -> M2 -> M3 -> M4 -> M5 -> M6`; establish classical UBFC-rPPG `POS` baseline (MAE <= 2.5 BPM) and M2 robustness before full cloud DL training. Only approved exception: web v0.1 Beta (HR only) per `docs/adr/ADR-002-web-beta-before-m2.md`.

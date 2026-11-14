@@ -1,0 +1,37 @@
+---
+description: Coding guidelines and style rules for the core source files
+globs: "src/**/*.py"
+alwaysApply: false
+---
+
+# Core Python Source Rules (`src/facehealth/`)
+
+## Architectural Patterns & Signal Rules
+- **Signal Pipeline Order**: `VideoCapture` (host monotonic timestamps) -> `LandmarkDetector` (MediaPipe `VIDEO` mode) -> `roi_extractor` (forehead + bilateral malar polygons, DC-preserving mean RGB) -> `pos_stream`/`chrom_stream` or `PhysNet` -> `filter_bank` -> `sqa_calculator` (`sqi >= cfg.sqi_gate`) -> `hr_estimator` (Welch PSD).
+- **DC Preservation**: Never detrend, bandpass, or z-score RGB traces before `pos_window` / `chrom_window`; both require the DC component (`cn = rgb / mu - 1.0`). Filter/detrend only the extracted BVP waveform.
+- **Three-Branch Filter Bank**: Keep the 3 configured Butterworth bands distinct (`hr_band_hz: [0.7, 3.0]`, `morph_band_hz: [0.5, 8.0]`, `resp_band_hz: [0.1, 0.7]`). Never hardcode band cutoffs outside `AppConfig.signal`.
+- **Config Synchronization**: Any schema change in `src/facehealth/utils/config_manager.py` must be mirrored in `configs/config.yaml` in the same edit. Never pass raw unvalidated `dict` objects where `AppConfig` is expected.
+
+## File Structure Map
+- `src/facehealth/__main__.py` & `pipeline.py`: CLI entry and M1 live HUD loop.
+- `src/facehealth/capture/video_capture.py`: Threaded UVC capture with `time.perf_counter()` packet timestamps.
+- `src/facehealth/landmarks/landmark_detector.py`: MediaPipe 478-point `FaceLandmarker` wrapper.
+- `src/facehealth/roi/roi_extractor.py`: Polygon mask rasterization and SNR-weighted ROI fusion.
+- `src/facehealth/classical/`: `pos_algorithm.py` (overlap-add POS) and `chrom_algorithm.py` (CHROM baseline).
+- `src/facehealth/deep_learning/`: `physnet_model.py` (3D-CNN), `losses.py` (`NegPearsonLoss`), `synthetic_dataset.py`, `train_physnet.py`.
+- `src/facehealth/vital_estimation/`: `filter_bank.py` (zero-phase Butterworth `filtfilt`) and `hr_estimator.py` (Welch PSD).
+- `src/facehealth/quality/sqa_calculator.py`: Spectral prominence SQI calculation.
+- `src/facehealth/evaluation/benchmark_pos.py`: Synthetic and UBFC-rPPG MAE evaluation harness.
+- `src/facehealth/utils/`: `config_manager.py` (Pydantic v2 models) and `logger.py` (stdout structured logging).
+
+## Code Style Constraints
+- **Typing & Imports**: Start every module with `from __future__ import annotations`. Annotate all function signatures and return types (`mypy` strict: `disallow_untyped_defs = true`, `check_untyped_defs = true`). Use absolute imports (`from facehealth.<subpkg> import ...`).
+- **Formatting**: Enforce `ruff` (`target-version = "py312"`, `line-length = 100`, rules `E, F, I, UP, B`).
+- **Vectorization**: Use `numpy`/`scipy`/`torch` vectorized array operations for DSP and ROI masks; avoid per-pixel Python loops.
+- **Ponytail Discipline**: Write the smallest complete diff. Prefer Python stdlib and existing repo helpers over new abstractions or wrappers.
+
+## Error-Handling & Privacy Requirements
+- **Zero PII / Frame Logging**: Never log raw video frames, face crops, landmark arrays, or user identifiers via `logger.py`.
+- **Deterministic Resource Cleanup**: Wrap `VideoCapture`, `LandmarkDetector`, and `cv2` GUI windows in context managers (`with`) or `try...finally` blocks so camera and native handles always close on error or exit.
+- **Signal Gating & Safe Fallbacks**: Return `None` (not `0.0` or `NaN`) for vital estimates when buffer length is below minimum window (`< 4-5 s`), face detection fails, or `sqi < cfg.sqi_gate`.
+- **Numerical Guards**: Guard all denominators in normalization, SNR, and Pearson loss math with explicit epsilons (`1e-8` or `1e-12`) and validate input tensor/array shapes at function boundaries (`raise ValueError(...)`).

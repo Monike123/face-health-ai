@@ -1,0 +1,25 @@
+name: ci
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -U pip && pip install -e ".[dev,api]"
+      - run: ruff check src tests
+      - run: mypy src/facehealth
+      - run: pytest -q
+      - name: Secret scan
+        run: |
+          if grep -RInE '(AKIA[0-9A-Z]{16}|BEGIN (RSA |OPENSSH )?PRIVATE KEY|sk-[a-zA-Z0-9]{20,}|sk_(test|live)_[A-Za-z0-9]{20,})' \
+            --exclude-dir=.venv --exclude-dir=.git --exclude-dir=.mypy_cache --exclude-dir=node_modules --exclude-dir=.next . ; then
+            echo "Possible secret detected"
+            exit 1
+          fi

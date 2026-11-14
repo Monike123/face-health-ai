@@ -1,0 +1,61 @@
+# Virtual envs
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.log
+
+# Data & model weights (do not commit raw biometrics / checkpoints)
+data/raw/**
+data/processed/**
+data/ground_truth/**
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+!data/ground_truth/.gitkeep
+models/checkpoints/**
+models/onnx/**
+models/*.task
+!models/checkpoints/.gitkeep
+!models/onnx/.gitkeep
+
+
+# Web / Vercel
+web/node_modules/
+web/.next/
+web/next-env.d.ts
+.vercel/
+
+# Local chat exports (not for public repo)
+cursor_plan_review_suggestions.md
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Experiment tracking local
+mlruns/
+.dvc/cache/
+
+# Secrets / keys
+*.pem
+*.key
+credentials.json
+secrets.yaml

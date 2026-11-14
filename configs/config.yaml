@@ -1,0 +1,31 @@
+# FaceHealth runtime defaults (wellness v1)
+app_name: FaceHealth-rPPG
+intended_use: wellness
+log_level: INFO
+sample_rate_hz: 30.0
+analysis_window_s: 10.0
+update_stride_s: 1.0
+sqi_gate: 0.50
+extractor: pos
+
+capture:
+  camera_id: 0
+  target_fps: 30.0
+  frame_buffer_seconds: 2.0
+  width: 640
+  height: 480
+
+signal:
+  hr_band_hz: [0.7, 3.0]
+  morph_band_hz: [0.5, 8.0]
+  resp_band_hz: [0.1, 0.7]
+
+features:
+  evm: false
+  deepphys: false
+  physformer: false
+  phase_net: false
+  ttt: false
+  blood_pressure: false
+  spo2: false
+  advanced_pad: false
