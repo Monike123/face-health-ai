@@ -1,8 +1,8 @@
-import { auth } from "@clerk/nextjs/server";
 import { NextResponse } from "next/server";
 import { hrFromTrace } from "@/lib/rppg";
 
 const DEV = process.env.NEXT_PUBLIC_DEV_AUTH === "1";
+const HAS_CLERK = Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY);
 
 type Body = { t_ms?: unknown; rgb?: unknown };
 
@@ -30,7 +30,8 @@ function validate(body: Body): { t_ms: number[]; rgb: number[][] } | string {
 }
 
 export async function POST(req: Request) {
-  if (!DEV) {
+  if (!DEV && HAS_CLERK) {
+    const { auth } = await import("@clerk/nextjs/server");
     const session = await auth();
     if (!session.userId) {
       return NextResponse.json({ detail: "sign in required" }, { status: 401 });

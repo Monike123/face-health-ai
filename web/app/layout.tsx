@@ -1,8 +1,6 @@
 import type { Metadata, Viewport } from "next";
-import Link from "next/link";
-import { ClerkProvider, Show, UserButton } from "@clerk/nextjs";
 import { Fraunces, Plus_Jakarta_Sans } from "next/font/google";
-import { DEV_AUTH } from "@/lib/dev";
+import Providers from "./Providers";
 import "./globals.css";
 
 const fraunces = Fraunces({
@@ -32,40 +30,11 @@ export const viewport: Viewport = {
   viewportFit: "cover",
 };
 
-function Shell({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="fh-shell">
-      <header className="fh-header">
-        <Link href="/" className="fh-brand">
-          FaceHealth<span>Beta</span>
-        </Link>
-        {DEV_AUTH ? (
-          <span className="text-xs font-medium text-[var(--ink-soft)]">Demo</span>
-        ) : (
-          <Show when="signed-in">
-            <UserButton />
-          </Show>
-        )}
-      </header>
-      <main className="fh-main">{children}</main>
-      <footer className="fh-footer">
-        Wellness tool only — not a medical device. Do not use for diagnosis or treatment.
-      </footer>
-    </div>
-  );
-}
-
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html lang="en" className={`${fraunces.variable} ${jakarta.variable} h-full`}>
       <body className="min-h-full antialiased">
-        {DEV_AUTH ? (
-          <Shell>{children}</Shell>
-        ) : (
-          <ClerkProvider signInUrl="/sign-in" signUpUrl="/sign-up">
-            <Shell>{children}</Shell>
-          </ClerkProvider>
-        )}
+        <Providers>{children}</Providers>
       </body>
     </html>
   );

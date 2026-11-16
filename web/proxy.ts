@@ -2,8 +2,11 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
 const DEV = process.env.NEXT_PUBLIC_DEV_AUTH === "1";
+const HAS_CLERK = Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY);
 
-async function clerkProxy(request: NextRequest) {
+export default async function proxy(request: NextRequest) {
+  if (DEV || !HAS_CLERK) return NextResponse.next();
+
   const { clerkMiddleware, createRouteMatcher } = await import("@clerk/nextjs/server");
   const isProtected = createRouteMatcher(["/scan(.*)"]);
   const handler = clerkMiddleware(
@@ -12,13 +15,7 @@ async function clerkProxy(request: NextRequest) {
     },
     { signInUrl: "/sign-in", signUpUrl: "/sign-up" },
   );
-  // clerkMiddleware returns a Next.js middleware function
   return handler(request, {} as never);
-}
-
-export default async function proxy(request: NextRequest) {
-  if (DEV) return NextResponse.next();
-  return clerkProxy(request);
 }
 
 export const config = {
