@@ -13,10 +13,13 @@ const W = 320;
 const H = 240;
 
 type Phase = "consent" | "loading" | "ready" | "scanning" | "processing" | "result" | "error";
-type Result = { hr_bpm: number | null; quality: "good" | "low"; message: string; disclaimer: string };
+type Result = {
+  hr_bpm: number | null;
+  quality: "good" | "low";
+  message: string;
+  disclaimer: string;
+};
 type Samples = { t: number[]; rgb: [number, number, number][]; missed: number; start: number | null };
-
-const btn = "rounded-md px-4 py-2 font-medium disabled:opacity-40";
 
 async function createLandmarker(): Promise<FaceLandmarker> {
   const fileset = await FilesetResolver.forVisionTasks(WASM_URL);
@@ -37,8 +40,10 @@ function cameraError(e: unknown): string {
   const name = e instanceof DOMException ? e.name : "";
   if (name === "NotAllowedError")
     return "Camera permission was denied. Allow camera access in your browser settings and try again.";
-  if (name === "NotFoundError" || name === "OverconstrainedError") return "No usable camera was found.";
-  if (name === "NotReadableError") return "Your camera is being used by another app. Close it and try again.";
+  if (name === "NotFoundError" || name === "OverconstrainedError")
+    return "No usable camera was found.";
+  if (name === "NotReadableError")
+    return "Your camera is being used by another app. Close it and try again.";
   return "Could not start the camera or load the face model. Check your connection and try again.";
 }
 
@@ -136,7 +141,7 @@ export default function ScanClient({
       let rgb: [number, number, number] | null = null;
       if (face) {
         const polys = roiPolygons(face, W, H);
-        octx.strokeStyle = "#4ade80";
+        octx.strokeStyle = "rgba(94, 234, 212, 0.9)";
         octx.lineWidth = 1.5;
         for (const poly of polys) {
           octx.beginPath();
@@ -201,7 +206,8 @@ export default function ScanClient({
         body: JSON.stringify({ t_ms: s.t.map((t) => t - t0), rgb: s.rgb }),
       });
       if (res.status === 401) return fail("Your session expired. Please sign in again.");
-      if (res.status === 503) return fail("Server auth is not configured. Check FACEHEALTH_DEV_AUTH or Clerk keys.");
+      if (res.status === 503)
+        return fail("Server auth is not configured. Check FACEHEALTH_DEV_AUTH or Clerk keys.");
       if (!res.ok)
         return fail(
           res.status === 422
@@ -216,108 +222,136 @@ export default function ScanClient({
   }
 
   const showCamera = phase === "loading" || phase === "ready" || phase === "scanning";
+  const progress = ((SCAN_SECONDS - secondsLeft) / SCAN_SECONDS) * 100;
 
   return (
-    <div className="space-y-5">
-      <h1 className="text-2xl font-bold">30-second scan</h1>
-
+    <div className="fh-fade flex flex-1 flex-col">
       {phase === "consent" && (
-        <div className="space-y-4">
-          <ul className="list-disc space-y-1 pl-5 text-sm">
-            <li>Sit in even, steady light (no strong light behind you).</li>
-            <li>Keep your face centred, stay still, and do not talk during the scan.</li>
-            <li>Your video stays on your device. Only colour averages are sent, and nothing is stored.</li>
-          </ul>
-          <label className="flex items-start gap-2 text-sm">
+        <div className="fh-rise flex flex-1 flex-col">
+          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[var(--accent)]">
+            Before you begin
+          </p>
+          <h1 className="mt-2 font-[family-name:var(--font-display)] text-[1.85rem] leading-tight tracking-[-0.03em]">
+            A calm thirty seconds
+          </h1>
+          <div className="fh-panel mt-5 space-y-3.5 p-4 text-[0.9rem] leading-relaxed text-[var(--ink-soft)]">
+            <p>Sit in even light. Avoid bright windows behind you.</p>
+            <p>Keep your face centred. Stay still. Try not to talk.</p>
+            <p>Your video stays on this device. Only colour averages are sent, and nothing is stored.</p>
+          </div>
+          <label className="fh-check fh-panel mt-4 p-4">
             <input
               type="checkbox"
-              className="mt-1"
               checked={agreed}
               onChange={(e) => setAgreed(e.target.checked)}
             />
-            I understand this is a wellness estimate, not a medical measurement, and should not be
-            used for medical decisions.
+            <span>
+              I understand this is a wellness estimate, not a medical measurement, and should not
+              be used for medical decisions.
+            </span>
           </label>
           <button
-            className={`${btn} bg-foreground text-background`}
+            className="fh-btn fh-btn-primary mt-auto w-full"
             disabled={!agreed}
             onClick={startCamera}
           >
-            Start camera
+            Enable camera
           </button>
         </div>
       )}
 
-      <div className={showCamera ? "space-y-3" : "hidden"}>
-        <div className="relative -scale-x-100 overflow-hidden rounded-md bg-black">
-          <video ref={videoRef} playsInline muted className="block w-full" />
-          <canvas ref={overlayRef} width={W} height={H} className="absolute inset-0 h-full w-full" />
+      <div className={showCamera ? "flex flex-1 flex-col" : "hidden"}>
+        <div className="fh-cam">
+          <video ref={videoRef} playsInline muted />
+          <canvas ref={overlayRef} width={W} height={H} />
+          <div className="fh-cam-frame" />
+          <div className="fh-cam-hud">
+            {phase === "loading" && (
+              <div className="flex items-center gap-3">
+                <div className="fh-spin" />
+                <p className="text-sm">Warming up camera and face model…</p>
+              </div>
+            )}
+            {phase === "ready" && (
+              <div className="space-y-3">
+                <p className="text-sm">
+                  {faceFound
+                    ? "Face locked. Get comfortable, then start."
+                    : "Centre your face in the frame."}
+                </p>
+                <button
+                  className="fh-btn fh-btn-primary w-full"
+                  disabled={!faceFound}
+                  onClick={beginScan}
+                >
+                  Start 30s scan
+                </button>
+              </div>
+            )}
+            {phase === "scanning" && (
+              <div className="text-center" aria-live="polite">
+                <div className="fh-ring" style={{ ["--p" as string]: progress }}>
+                  <span>{secondsLeft}</span>
+                </div>
+                <p className="text-sm font-medium">
+                  {faceFound ? "Hold still — reading your pulse" : "Face lost — move back into view"}
+                </p>
+              </div>
+            )}
+          </div>
         </div>
-
-        {phase === "loading" && <p>Starting camera and loading the face model...</p>}
-
-        {phase === "ready" && (
-          <div className="space-y-3">
-            <p>
-              {faceFound
-                ? "Face detected. Get comfortable and hold still."
-                : "No face found. Centre your face in the frame."}
-            </p>
-            <button
-              className={`${btn} bg-foreground text-background`}
-              disabled={!faceFound}
-              onClick={beginScan}
-            >
-              Start 30-second scan
-            </button>
-          </div>
-        )}
-
-        {phase === "scanning" && (
-          <div className="space-y-2" aria-live="polite">
-            <p>
-              Hold still... <strong>{secondsLeft}s</strong> left
-              {!faceFound && " (face not found, move back into view)"}
-            </p>
-            <div className="h-2 w-full rounded bg-foreground/10">
-              <div
-                className="h-2 rounded bg-green-500 transition-all"
-                style={{ width: `${((SCAN_SECONDS - secondsLeft) / SCAN_SECONDS) * 100}%` }}
-              />
-            </div>
-          </div>
-        )}
       </div>
 
-      {phase === "processing" && <p aria-live="polite">Calculating your estimate...</p>}
+      {phase === "processing" && (
+        <div className="fh-rise flex flex-1 flex-col items-center justify-center gap-4 text-center">
+          <div className="fh-spin" />
+          <p className="font-[family-name:var(--font-display)] text-xl">Reading your signal…</p>
+          <p className="text-sm text-[var(--ink-soft)]">Usually takes a second</p>
+        </div>
+      )}
 
       {phase === "result" && result && (
-        <div className="space-y-3 rounded-md border p-5" aria-live="polite">
+        <div className="fh-rise flex flex-1 flex-col text-center" aria-live="polite">
           {result.hr_bpm !== null ? (
             <>
-              <p className="text-sm opacity-70">Estimated heart rate</p>
-              <p className="text-5xl font-bold">
-                {Math.round(result.hr_bpm)} <span className="text-xl font-normal">BPM</span>
+              <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[var(--accent)]">
+                Estimated heart rate
               </p>
-              <p className="text-sm">Signal quality: Good</p>
+              <p className="fh-bpm mt-3">
+                {Math.round(result.hr_bpm)}
+                <span className="ml-2 align-middle text-lg font-semibold tracking-normal text-[var(--ink-soft)]">
+                  BPM
+                </span>
+              </p>
+              <div className="mt-4">
+                <span className="fh-chip">Signal quality · Good</span>
+              </div>
             </>
           ) : (
             <>
-              <p className="text-lg font-semibold">We could not get a clear reading</p>
-              <p className="text-sm">Signal quality: Low. {result.message}</p>
+              <p className="font-[family-name:var(--font-display)] text-2xl tracking-[-0.02em]">
+                Couldn’t get a clear reading
+              </p>
+              <div className="mt-4">
+                <span className="fh-chip fh-chip-warn">Signal quality · Low</span>
+              </div>
+              <p className="mt-4 text-sm leading-relaxed text-[var(--ink-soft)]">{result.message}</p>
             </>
           )}
-          <p className="text-xs opacity-70">{result.disclaimer}</p>
-          <button className={`${btn} border`} onClick={startCamera}>
+          <p className="mt-6 text-xs leading-relaxed text-[var(--ink-soft)]">{result.disclaimer}</p>
+          <button className="fh-btn fh-btn-primary mt-auto w-full" onClick={startCamera}>
             Scan again
           </button>
         </div>
       )}
 
       {phase === "error" && (
-        <div className="space-y-3" role="alert">
-          <p className="text-red-600">{error}</p>
-          <button className={`${btn} border`} onClick={startCamera}>
+        <div className="fh-rise flex flex-1 flex-col" role="alert">
+          <p className="font-[family-name:var(--font-display)] text-2xl tracking-[-0.02em]">
+            Something went wrong
+          </p>
+          <p className="mt-3 text-sm leading-relaxed text-[var(--danger)]">{error}</p>
+          <button className="fh-btn fh-btn-primary mt-auto w-full" onClick={startCamera}>
             Try again
           </button>
         </div>

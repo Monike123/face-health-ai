@@ -1,56 +1,64 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import Link from "next/link";
 import { ClerkProvider, Show, UserButton } from "@clerk/nextjs";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Fraunces, Plus_Jakarta_Sans } from "next/font/google";
 import { DEV_AUTH } from "@/lib/dev";
 import "./globals.css";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
+const fraunces = Fraunces({
+  variable: "--font-fraunces",
   subsets: ["latin"],
+  display: "swap",
 });
 
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
+const jakarta = Plus_Jakarta_Sans({
+  variable: "--font-jakarta",
   subsets: ["latin"],
+  display: "swap",
 });
 
 export const metadata: Metadata = {
-  title: "FaceHealth AI (Beta)",
+  title: "FaceHealth AI",
   description: "Estimate your heart rate from a 30-second face scan. Wellness use only.",
+  applicationName: "FaceHealth AI",
+  appleWebApp: { capable: true, title: "FaceHealth AI", statusBarStyle: "default" },
+};
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 1,
+  themeColor: "#eef5f3",
+  viewportFit: "cover",
 };
 
 function Shell({ children }: { children: React.ReactNode }) {
   return (
-    <>
-      <header className="flex items-center justify-between border-b px-6 py-3">
-        <Link href="/" className="font-semibold">
-          FaceHealth AI <span className="text-xs font-normal opacity-70">Beta</span>
+    <div className="fh-shell">
+      <header className="fh-header">
+        <Link href="/" className="fh-brand">
+          FaceHealth<span>Beta</span>
         </Link>
         {DEV_AUTH ? (
-          <span className="text-xs opacity-70">Local demo (no sign-in)</span>
+          <span className="text-xs font-medium text-[var(--ink-soft)]">Demo</span>
         ) : (
           <Show when="signed-in">
             <UserButton />
           </Show>
         )}
       </header>
-      <main className="mx-auto w-full max-w-2xl flex-1 px-6 py-8">{children}</main>
-      <footer className="border-t px-6 py-3 text-center text-xs opacity-70">
-        FaceHealth AI Beta is a wellness tool, not a medical device. It does not diagnose,
-        treat, or prevent any condition.
+      <main className="fh-main">{children}</main>
+      <footer className="fh-footer">
+        Wellness tool only — not a medical device. Do not use for diagnosis or treatment.
       </footer>
-    </>
+    </div>
   );
 }
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
-    <html
-      lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
-    >
-      <body className="min-h-full flex flex-col">
+    <html lang="en" className={`${fraunces.variable} ${jakarta.variable} h-full`}>
+      <body className="min-h-full antialiased">
         {DEV_AUTH ? (
           <Shell>{children}</Shell>
         ) : (
