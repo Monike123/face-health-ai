@@ -9,17 +9,18 @@ export default function Shell({ children }: { children: React.ReactNode }) {
     <div className="fh-shell">
       <header className="fh-header">
         <Link href="/" className="fh-brand">
-          FaceHealth<span>Beta</span>
+          FaceHealth<em>Beta</em>
         </Link>
         {USE_CLERK ? (
           <HeaderAuth />
         ) : (
-          <span className="text-xs font-medium text-[var(--ink-soft)]">Demo</span>
+          <span style={{ fontSize: "0.8rem", color: "var(--muted)" }}>Local demo</span>
         )}
       </header>
       <main className="fh-main">{children}</main>
       <footer className="fh-footer">
-        Wellness tool only — not a medical device. Do not use for diagnosis or treatment.
+        FaceHealth AI is a wellness tool, not a medical device. Do not use it for diagnosis or
+        treatment decisions.
       </footer>
     </div>
   );

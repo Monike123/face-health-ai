@@ -99,7 +99,11 @@ export default function ScanClient({
     try {
       landmarkerRef.current ??= await createLandmarker();
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: 640, height: 480, facingMode: "user" },
+        video: {
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+          facingMode: "user",
+        },
         audio: false,
       });
       streamRef.current = stream;
@@ -225,137 +229,181 @@ export default function ScanClient({
   const progress = ((SCAN_SECONDS - secondsLeft) / SCAN_SECONDS) * 100;
 
   return (
-    <div className="fh-fade flex flex-1 flex-col">
-      {phase === "consent" && (
-        <div className="fh-rise flex flex-1 flex-col">
-          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[var(--accent)]">
-            Before you begin
-          </p>
-          <h1 className="mt-2 font-[family-name:var(--font-display)] text-[1.85rem] leading-tight tracking-[-0.03em]">
-            A calm thirty seconds
-          </h1>
-          <div className="fh-panel mt-5 space-y-3.5 p-4 text-[0.9rem] leading-relaxed text-[var(--ink-soft)]">
-            <p>Sit in even light. Avoid bright windows behind you.</p>
-            <p>Keep your face centred. Stay still. Try not to talk.</p>
-            <p>Your video stays on this device. Only colour averages are sent, and nothing is stored.</p>
+    <div className="fh-scan fh-fade">
+      <aside className="fh-scan-side">
+        {phase === "consent" && (
+          <div>
+            <p className="fh-kicker">Scan setup</p>
+            <h1 className="fh-title" style={{ fontSize: "clamp(1.8rem, 3vw, 2.4rem)" }}>
+              30 seconds at your desk
+            </h1>
+            <div className="fh-panel" style={{ marginTop: "1.1rem", padding: "1rem 1.05rem" }}>
+              <p style={{ margin: 0, color: "var(--muted)", lineHeight: 1.5 }}>
+                Sit upright in even light. Keep your face inside the frame. Stay still and quiet
+                until the timer ends.
+              </p>
+            </div>
+            <label className="fh-check fh-panel" style={{ marginTop: "0.75rem", padding: "1rem" }}>
+              <input
+                type="checkbox"
+                checked={agreed}
+                onChange={(e) => setAgreed(e.target.checked)}
+              />
+              <span>
+                I understand this is a wellness estimate, not a medical measurement, and should
+                not be used for medical decisions.
+              </span>
+            </label>
+            <button
+              className="fh-btn fh-btn-primary"
+              style={{ marginTop: "1rem", width: "100%" }}
+              disabled={!agreed}
+              onClick={startCamera}
+            >
+              Enable camera
+            </button>
           </div>
-          <label className="fh-check fh-panel mt-4 p-4">
-            <input
-              type="checkbox"
-              checked={agreed}
-              onChange={(e) => setAgreed(e.target.checked)}
-            />
-            <span>
-              I understand this is a wellness estimate, not a medical measurement, and should not
-              be used for medical decisions.
-            </span>
-          </label>
-          <button
-            className="fh-btn fh-btn-primary mt-auto w-full"
-            disabled={!agreed}
-            onClick={startCamera}
-          >
-            Enable camera
-          </button>
-        </div>
-      )}
+        )}
 
-      <div className={showCamera ? "flex flex-1 flex-col" : "hidden"}>
+        {(phase === "ready" || phase === "loading" || phase === "scanning") && (
+          <div>
+            <p className="fh-kicker">Live scan</p>
+            <h2 className="fh-title" style={{ fontSize: "1.7rem" }}>
+              {phase === "scanning" ? `${secondsLeft}s left` : "Ready when you are"}
+            </h2>
+            <p style={{ marginTop: "0.75rem", color: "var(--muted)", lineHeight: 1.5 }}>
+              {phase === "loading" && "Starting camera and loading the face model."}
+              {phase === "ready" &&
+                (faceFound
+                  ? "Face detected. Click start and hold still."
+                  : "Move into the frame until your face is detected.")}
+              {phase === "scanning" &&
+                (faceFound
+                  ? "Hold still. Looking for your pulse signal."
+                  : "Face lost — move back into the frame.")}
+            </p>
+            {phase === "ready" && (
+              <button
+                className="fh-btn fh-btn-primary"
+                style={{ marginTop: "1.1rem", width: "100%" }}
+                disabled={!faceFound}
+                onClick={beginScan}
+              >
+                Start 30s scan
+              </button>
+            )}
+            {phase === "scanning" && (
+              <div className="fh-progress" aria-hidden>
+                <span style={{ width: `${progress}%` }} />
+              </div>
+            )}
+          </div>
+        )}
+
+        {phase === "processing" && (
+          <div>
+            <p className="fh-kicker">Processing</p>
+            <h2 className="fh-title" style={{ fontSize: "1.7rem" }}>
+              Estimating heart rate
+            </h2>
+            <p style={{ marginTop: "0.75rem", color: "var(--muted)" }}>Usually under a second.</p>
+          </div>
+        )}
+
+        {phase === "result" && result && (
+          <div aria-live="polite">
+            <p className="fh-kicker">Result</p>
+            {result.hr_bpm !== null ? (
+              <>
+                <h2 style={{ margin: 0, fontSize: "0.95rem", fontWeight: 600, color: "var(--muted)" }}>
+                  Estimated heart rate
+                </h2>
+                <p className="fh-bpm">
+                  {Math.round(result.hr_bpm)}
+                  <span style={{ marginLeft: "0.4rem", fontSize: "1rem", color: "var(--muted)" }}>
+                    BPM
+                  </span>
+                </p>
+                <span className="fh-tag">Signal quality · Good</span>
+              </>
+            ) : (
+              <>
+                <h2 className="fh-title" style={{ fontSize: "1.6rem" }}>
+                  No clear reading
+                </h2>
+                <span className="fh-tag fh-tag-warn">Signal quality · Low</span>
+                <p style={{ marginTop: "0.9rem", color: "var(--muted)", lineHeight: 1.5 }}>
+                  {result.message}
+                </p>
+              </>
+            )}
+            <p style={{ marginTop: "1rem", fontSize: "0.8rem", color: "var(--muted)", lineHeight: 1.45 }}>
+              {result.disclaimer}
+            </p>
+            <button
+              className="fh-btn fh-btn-primary"
+              style={{ marginTop: "1.2rem", width: "100%" }}
+              onClick={startCamera}
+            >
+              Scan again
+            </button>
+          </div>
+        )}
+
+        {phase === "error" && (
+          <div role="alert">
+            <p className="fh-kicker">Error</p>
+            <h2 className="fh-title" style={{ fontSize: "1.6rem" }}>
+              Camera or scan failed
+            </h2>
+            <p style={{ marginTop: "0.8rem", color: "var(--danger)", lineHeight: 1.5 }}>{error}</p>
+            <button
+              className="fh-btn fh-btn-primary"
+              style={{ marginTop: "1.2rem", width: "100%" }}
+              onClick={startCamera}
+            >
+              Try again
+            </button>
+          </div>
+        )}
+      </aside>
+
+      <div className={showCamera || phase === "consent" ? undefined : "hidden"}>
         <div className="fh-cam">
           <video ref={videoRef} playsInline muted />
           <canvas ref={overlayRef} width={W} height={H} />
           <div className="fh-cam-frame" />
-          <div className="fh-cam-hud">
-            {phase === "loading" && (
-              <div className="flex items-center gap-3">
-                <div className="fh-spin" />
-                <p className="text-sm">Warming up camera and face model…</p>
-              </div>
-            )}
-            {phase === "ready" && (
-              <div className="space-y-3">
-                <p className="text-sm">
-                  {faceFound
-                    ? "Face locked. Get comfortable, then start."
-                    : "Centre your face in the frame."}
-                </p>
-                <button
-                  className="fh-btn fh-btn-primary w-full"
-                  disabled={!faceFound}
-                  onClick={beginScan}
-                >
-                  Start 30s scan
-                </button>
-              </div>
-            )}
-            {phase === "scanning" && (
-              <div className="text-center" aria-live="polite">
-                <div className="fh-ring" style={{ ["--p" as string]: progress }}>
-                  <span>{secondsLeft}</span>
+          {showCamera && (
+            <div className="fh-cam-hud">
+              {phase === "loading" && (
+                <div style={{ display: "flex", alignItems: "center", gap: "0.7rem" }}>
+                  <div className="fh-spin" />
+                  <span>Opening camera…</span>
                 </div>
-                <p className="text-sm font-medium">
-                  {faceFound ? "Hold still — reading your pulse" : "Face lost — move back into view"}
-                </p>
-              </div>
-            )}
-          </div>
+              )}
+              {phase === "ready" && (
+                <span>{faceFound ? "Face in frame" : "Looking for face…"}</span>
+              )}
+              {phase === "scanning" && (
+                <div>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem" }}>
+                    <span>{faceFound ? "Recording pulse signal" : "Face lost"}</span>
+                    <strong>{secondsLeft}s</strong>
+                  </div>
+                  <div className="fh-progress">
+                    <span style={{ width: `${progress}%` }} />
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+          {phase === "consent" && (
+            <div className="fh-cam-hud">
+              <span>Camera preview appears here after you enable access</span>
+            </div>
+          )}
         </div>
       </div>
-
-      {phase === "processing" && (
-        <div className="fh-rise flex flex-1 flex-col items-center justify-center gap-4 text-center">
-          <div className="fh-spin" />
-          <p className="font-[family-name:var(--font-display)] text-xl">Reading your signal…</p>
-          <p className="text-sm text-[var(--ink-soft)]">Usually takes a second</p>
-        </div>
-      )}
-
-      {phase === "result" && result && (
-        <div className="fh-rise flex flex-1 flex-col text-center" aria-live="polite">
-          {result.hr_bpm !== null ? (
-            <>
-              <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[var(--accent)]">
-                Estimated heart rate
-              </p>
-              <p className="fh-bpm mt-3">
-                {Math.round(result.hr_bpm)}
-                <span className="ml-2 align-middle text-lg font-semibold tracking-normal text-[var(--ink-soft)]">
-                  BPM
-                </span>
-              </p>
-              <div className="mt-4">
-                <span className="fh-chip">Signal quality · Good</span>
-              </div>
-            </>
-          ) : (
-            <>
-              <p className="font-[family-name:var(--font-display)] text-2xl tracking-[-0.02em]">
-                Couldn’t get a clear reading
-              </p>
-              <div className="mt-4">
-                <span className="fh-chip fh-chip-warn">Signal quality · Low</span>
-              </div>
-              <p className="mt-4 text-sm leading-relaxed text-[var(--ink-soft)]">{result.message}</p>
-            </>
-          )}
-          <p className="mt-6 text-xs leading-relaxed text-[var(--ink-soft)]">{result.disclaimer}</p>
-          <button className="fh-btn fh-btn-primary mt-auto w-full" onClick={startCamera}>
-            Scan again
-          </button>
-        </div>
-      )}
-
-      {phase === "error" && (
-        <div className="fh-rise flex flex-1 flex-col" role="alert">
-          <p className="font-[family-name:var(--font-display)] text-2xl tracking-[-0.02em]">
-            Something went wrong
-          </p>
-          <p className="mt-3 text-sm leading-relaxed text-[var(--danger)]">{error}</p>
-          <button className="fh-btn fh-btn-primary mt-auto w-full" onClick={startCamera}>
-            Try again
-          </button>
-        </div>
-      )}
     </div>
   );
 }

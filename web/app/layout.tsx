@@ -1,16 +1,16 @@
 import type { Metadata, Viewport } from "next";
-import { Fraunces, Plus_Jakarta_Sans } from "next/font/google";
+import { Sora, Source_Sans_3 } from "next/font/google";
 import Providers from "./Providers";
 import "./globals.css";
 
-const fraunces = Fraunces({
-  variable: "--font-fraunces",
+const sora = Sora({
+  variable: "--font-sora",
   subsets: ["latin"],
   display: "swap",
 });
 
-const jakarta = Plus_Jakarta_Sans({
-  variable: "--font-jakarta",
+const source = Source_Sans_3({
+  variable: "--font-source",
   subsets: ["latin"],
   display: "swap",
 });
@@ -25,14 +25,13 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  maximumScale: 1,
-  themeColor: "#eef5f3",
+  themeColor: "#f3f1ec",
   viewportFit: "cover",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
-    <html lang="en" className={`${fraunces.variable} ${jakarta.variable} h-full`}>
+    <html lang="en" className={`${sora.variable} ${source.variable} h-full`}>
       <body className="min-h-full antialiased">
         <Providers>{children}</Providers>
       </body>
