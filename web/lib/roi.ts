@@ -110,7 +110,7 @@ export function sampleRoiRgb(
       n++;
     }
   }
-  if (n < 200) return null;
+  if (n < 50) return null; // match Python per-region floor at downscaled canvas
 
   const regions: Record<string, [number, number, number] | null> = {};
   if (regionPolys) {

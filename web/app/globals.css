@@ -360,8 +360,58 @@ body {
   inset: 0;
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
+}
+
+@media (min-width: 900px) {
+  .fh-cam video,
+  .fh-cam canvas {
+    object-fit: cover;
+  }
+}
+
+.fh-cam-mirror video,
+.fh-cam-mirror canvas {
   transform: scaleX(-1);
+}
+
+.fh-cam-nomirror video,
+.fh-cam-nomirror canvas {
+  transform: none;
+}
+
+.fh-cam-lit {
+  box-shadow: 0 0 0 48px #f7f4ee, 0 0 0 120px #fffef8;
+  background: #f7f4ee;
+}
+
+.fh-illuminate {
+  background: linear-gradient(#fffef8, var(--bg));
+}
+
+.fh-cam-toggle {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.75rem;
+}
+
+.fh-cam-toggle button {
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 600;
+  padding: 0.4rem 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.fh-cam-toggle button.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #f7f4ee;
 }
 
 .fh-cam-hud {

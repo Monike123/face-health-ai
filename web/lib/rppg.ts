@@ -1,9 +1,12 @@
-/** Classical POS → Butterworth bandpass → SQI → Welch HR (mirrors facehealth Python path). */
+/** Classical POS/CHROM/Green → bandpass → FFT SQI → Welch HR (Python SQI parity). */
 
 const FS = 30;
 const HR_LO = 0.7;
 const HR_HI = 3.0;
-const SQI_GATE = 0.5;
+/** FFT peak/band gate (Python-style). Noise ~0.06–0.09; clean ~0.9–1.0. */
+const SQI_GATE = 0.45;
+/** Soft path for pitch demos: show Low-confidence BPM when a stable peak exists. */
+const SQI_SOFT = 0.3;
 
 function mean(xs: number[]): number {
   let s = 0;
@@ -69,7 +72,57 @@ function posStream(rgb: number[][], win = 48): number[] {
   return out.map((v, i) => v / Math.max(counts[i], 1e-8));
 }
 
-/** Cascaded Butterworth HP 0.7 + LP 3.0 (order 2 each), zero-phase. */
+function chromWindow(rgb: number[][]): number[] {
+  const n = rgb.length;
+  const mu = [0, 0, 0];
+  for (const row of rgb) {
+    mu[0] += row[0];
+    mu[1] += row[1];
+    mu[2] += row[2];
+  }
+  mu[0] = Math.abs(mu[0] / n) < 1e-8 ? 1e-8 : mu[0] / n;
+  mu[1] = Math.abs(mu[1] / n) < 1e-8 ? 1e-8 : mu[1] / n;
+  mu[2] = Math.abs(mu[2] / n) < 1e-8 ? 1e-8 : mu[2] / n;
+  const xs: number[] = [];
+  const ys: number[] = [];
+  for (const row of rgb) {
+    const cn0 = row[0] / mu[0] - 1;
+    const cn1 = row[1] / mu[1] - 1;
+    const cn2 = row[2] / mu[2] - 1;
+    xs.push(3 * cn0 - 2 * cn1);
+    ys.push(1.5 * cn0 + cn1 - 1.5 * cn2);
+  }
+  const alpha = std(xs) / (std(ys) + 1e-8);
+  const s = xs.map((v, i) => v - alpha * ys[i]);
+  const sm = mean(s);
+  return s.map((v) => v - sm);
+}
+
+function chromStream(rgb: number[][], win = 48): number[] {
+  const t = rgb.length;
+  const out = new Array(t).fill(0);
+  const counts = new Array(t).fill(0);
+  if (t < win) return out;
+  const w = Array.from({ length: win }, (_, i) =>
+    win === 1 ? 1 : 0.5 * (1 - Math.cos((2 * Math.PI * i) / (win - 1))),
+  );
+  for (let start = 0; start <= t - win; start++) {
+    const h = chromWindow(rgb.slice(start, start + win));
+    for (let i = 0; i < win; i++) {
+      out[start + i] += h[i] * w[i];
+      counts[start + i] += w[i];
+    }
+  }
+  return out.map((v, i) => v / Math.max(counts[i], 1e-8));
+}
+
+function greenStream(rgb: number[][]): number[] {
+  const g = rgb.map((row) => row[1]);
+  const m = mean(g);
+  return g.map((v) => v - m);
+}
+
+/** Cascaded Butterworth HP + LP, zero-phase. */
 function bandpass(x: number[], fs: number, lo: number, hi: number): number[] {
   if (x.length < 30) return x.slice();
   const hp = butter1(x, fs, lo, "high");
@@ -83,7 +136,7 @@ function butter1(x: number[], fs: number, cutoff: number, type: "low" | "high"):
   const w0 = (2 * Math.PI * cutoff) / fs;
   const cosw = Math.cos(w0);
   const sinw = Math.sin(w0);
-  const alpha = sinw / (2 * Math.SQRT2); // Q = √2/2 → Butterworth
+  const alpha = sinw / (2 * Math.SQRT2);
   let b0: number, b1: number, b2: number, a0: number, a1: number, a2: number;
   if (type === "low") {
     b0 = (1 - cosw) / 2;
@@ -122,6 +175,26 @@ function butter1(x: number[], fs: number, cutoff: number, type: "low" | "high"):
   return y;
 }
 
+/** Unwindowed rFFT power — matches Python sqi_from_bvp. */
+function fftPsd(x: number[], fs: number): { freqs: number[]; psd: number[] } {
+  const n = x.length;
+  const half = Math.floor(n / 2) + 1;
+  const psd = new Array(half).fill(0);
+  const freqs = new Array(half);
+  for (let k = 0; k < half; k++) {
+    let re = 0,
+      im = 0;
+    const ang = (-2 * Math.PI * k) / n;
+    for (let t = 0; t < n; t++) {
+      re += x[t] * Math.cos(ang * t);
+      im += x[t] * Math.sin(ang * t);
+    }
+    psd[k] = re * re + im * im;
+    freqs[k] = (k * fs) / n;
+  }
+  return { freqs, psd };
+}
+
 function periodogram(
   seg: number[],
   fs: number,
@@ -149,7 +222,6 @@ function periodogram(
   return { freqs, psd };
 }
 
-/** Welch PSD with 50% overlap (matches scipy default style). */
 function welchPsd(x: number[], fs: number, nperseg: number): { freqs: number[]; psd: number[] } {
   const step = Math.max(1, Math.floor(nperseg / 2));
   const half = Math.floor(nperseg / 2) + 1;
@@ -163,8 +235,7 @@ function welchPsd(x: number[], fs: number, nperseg: number): { freqs: number[]; 
     count++;
   }
   if (count === 0) {
-    const { freqs: f, psd } = periodogram(x.slice(0, Math.min(x.length, nperseg)), fs);
-    return { freqs: f, psd };
+    return periodogram(x.slice(0, Math.min(x.length, nperseg)), fs);
   }
   return { freqs, psd: acc.map((v) => v / count) };
 }
@@ -201,12 +272,11 @@ function peakInBand(
   };
 }
 
+/** Python-parity SQI: full-trace FFT peak / band power. */
 function sqiFromBvp(bvp: number[], fs: number): number {
   if (bvp.length < fs * 4) return 0;
-  const m = mean(bvp);
-  const x = bvp.map((v) => v - m);
-  const nperseg = Math.min(x.length, Math.max(64, Math.floor(fs * 8)));
-  const { freqs, psd } = welchPsd(x, fs, nperseg);
+  const x = bvp.map((v) => v - mean(bvp));
+  const { freqs, psd } = fftPsd(x, fs);
   return peakInBand(freqs, psd).peakRatio;
 }
 
@@ -219,8 +289,10 @@ function estimateHr(bvp: number[], fs: number): { hr: number | null; conf: numbe
   return { hr, conf: peakRatio };
 }
 
-/** Sliding 10 s windows every 2 s → median HR + IQR range. */
-function slidingHr(bvp: number[], fs: number): { median: number | null; lo: number | null; hi: number | null; hrs: number[] } {
+function slidingHr(
+  bvp: number[],
+  fs: number,
+): { median: number | null; lo: number | null; hi: number | null; hrs: number[] } {
   const win = Math.floor(fs * 10);
   const step = Math.floor(fs * 2);
   const hrs: number[] = [];
@@ -263,24 +335,23 @@ function downsampleWaveform(bvp: number[], points = 120): number[] {
   if (bvp.length <= points) return bvp.slice();
   const out: number[] = [];
   const step = (bvp.length - 1) / (points - 1);
-  for (let i = 0; i < points; i++) {
-    const idx = Math.round(i * step);
-    out.push(bvp[idx]);
-  }
+  for (let i = 0; i < points; i++) out.push(bvp[Math.round(i * step)]);
   return out;
 }
 
 export type ConfidenceLabel = "High" | "Medium" | "Low";
+export type RppgMethod = "POS" | "CHROM" | "Green";
 
 export type HrResult = {
   scan_id: string;
   hr_bpm: number | null;
   hr_lo: number | null;
   hr_hi: number | null;
-  confidence: number; // 0-100
+  confidence: number;
   confidence_label: ConfidenceLabel;
   confidence_reason: string;
   sqi: number;
+  method: RppgMethod;
   quality: "good" | "low";
   waveform: number[];
   message: string;
@@ -307,17 +378,42 @@ function scoreConfidence(opts: {
     agreement = Math.max(0, 1 - spread / 15);
   }
   const raw =
-    0.35 * sqi +
-    0.25 * agreement +
-    0.2 * peakRatio +
-    0.1 * fpsFactor +
-    0.1 * faceFrac;
+    0.35 * sqi + 0.25 * agreement + 0.2 * peakRatio + 0.1 * fpsFactor + 0.1 * faceFrac;
   const score = Math.round(Math.min(1, Math.max(0, raw)) * 100);
   const label: ConfidenceLabel = score >= 70 ? "High" : score >= 45 ? "Medium" : "Low";
   let reason = "Signal looks stable.";
-  if (label === "Low") reason = "Signal was weak or unstable — try better light and stay still.";
-  else if (label === "Medium") reason = "Decent signal; a calmer, brighter scan may improve it.";
+  if (label === "Low")
+    reason = "Low confidence — lighting or motion limited this reading.";
+  else if (label === "Medium")
+    reason = "Decent signal; a calmer, brighter scan may improve it.";
   return { score, label, reason };
+}
+
+type MethodCandidate = {
+  name: RppgMethod;
+  bvpF: number[];
+  sqi: number;
+  hr: number | null;
+  peakRatio: number;
+  slid: ReturnType<typeof slidingHr>;
+};
+
+function evaluateMethod(
+  name: RppgMethod,
+  raw: number[],
+): MethodCandidate {
+  const bvpF = bandpass(raw, FS, HR_LO, HR_HI);
+  const sqi = sqiFromBvp(bvpF, FS);
+  const { hr: singleHr, conf: peakRatio } = estimateHr(bvpF, FS);
+  const slid = slidingHr(bvpF, FS);
+  return {
+    name,
+    bvpF,
+    sqi,
+    hr: slid.median ?? singleHr,
+    peakRatio,
+    slid,
+  };
 }
 
 export function hrFromTrace(
@@ -334,22 +430,31 @@ export function hrFromTrace(
   const faceFrac = opts?.faceFrac ?? 1;
 
   const grid = resampleRgb(tSec, rgb);
-  const bvp = posStream(grid, Math.min(48, grid.length));
-  const bvpF = bandpass(bvp, FS, HR_LO, HR_HI);
-  const sqi = sqiFromBvp(bvpF, FS);
-  const { hr: singleHr, conf: peakRatio } = estimateHr(bvpF, FS);
-  const slid = slidingHr(bvpF, FS);
-  const hr = slid.median ?? singleHr;
-  const waveform = downsampleWaveform(bvpF.slice(-Math.floor(FS * 10)), 120);
+  const win = Math.min(48, grid.length);
+  const candidates: MethodCandidate[] = [
+    evaluateMethod("POS", posStream(grid, win)),
+    evaluateMethod("CHROM", chromStream(grid, win)),
+    evaluateMethod("Green", greenStream(grid)),
+  ];
+  candidates.sort((a, b) => b.sqi - a.sqi);
+  const best = candidates[0];
+  const waveform = downsampleWaveform(best.bvpF.slice(-Math.floor(FS * 10)), 120);
   const { score, label, reason } = scoreConfidence({
-    sqi,
-    peakRatio,
-    hrs: slid.hrs,
+    sqi: best.sqi,
+    peakRatio: best.peakRatio,
+    hrs: best.slid.hrs,
     faceFrac,
     fpsFactor,
   });
 
-  if (hr === null || sqi < SQI_GATE) {
+  const stablePeak =
+    best.hr !== null &&
+    best.hr >= 40 &&
+    best.hr <= 180 &&
+    (best.slid.hrs.length >= 2 || best.peakRatio >= 0.15);
+
+  // Hard fail: noise / no peak
+  if (best.hr === null || best.sqi < SQI_SOFT || !stablePeak) {
     return {
       scan_id: newScanId(),
       hr_bpm: null,
@@ -358,26 +463,39 @@ export function hrFromTrace(
       confidence: score,
       confidence_label: "Low",
       confidence_reason: reason,
-      sqi,
+      sqi: best.sqi,
+      method: best.name,
       quality: "low",
       waveform,
-      message: "We could not get a clear reading. Sit still in even light, face the camera, and retry.",
+      message:
+        "We could not get a clear reading. Sit still in even light, face the camera, and retry.",
       disclaimer,
     };
   }
 
+  // Soft path: weak but usable → show BPM with Low confidence (investor pitch)
+  const soft = best.sqi < SQI_GATE;
+  const confLabel: ConfidenceLabel = soft ? "Low" : label;
+  const confScore = soft ? Math.min(score, 44) : score;
+  const confReason = soft
+    ? "Low confidence — lighting or motion limited this reading."
+    : reason;
+
   return {
     scan_id: newScanId(),
-    hr_bpm: Math.round(hr * 10) / 10,
-    hr_lo: slid.lo !== null ? Math.round(slid.lo) : null,
-    hr_hi: slid.hi !== null ? Math.round(slid.hi) : null,
-    confidence: score,
-    confidence_label: label,
-    confidence_reason: reason,
-    sqi,
-    quality: label === "Low" ? "low" : "good",
+    hr_bpm: Math.round(best.hr * 10) / 10,
+    hr_lo: best.slid.lo !== null ? Math.round(best.slid.lo) : null,
+    hr_hi: best.slid.hi !== null ? Math.round(best.slid.hi) : null,
+    confidence: confScore,
+    confidence_label: confLabel,
+    confidence_reason: confReason,
+    sqi: best.sqi,
+    method: best.name,
+    quality: confLabel === "Low" ? "low" : "good",
     waveform,
-    message: "Estimate ready.",
+    message: soft
+      ? "Estimate ready (low confidence). Brighter light and less motion help."
+      : "Estimate ready.",
     disclaimer,
   };
 }

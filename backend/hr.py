@@ -1,4 +1,4 @@
-"""Minimal POS → bandpass → Welch HR (parity with facehealth.vital_estimation)."""
+"""POS / CHROM / Green → bandpass → FFT SQI → Welch HR (web rppg.ts parity)."""
 
 from __future__ import annotations
 
@@ -7,7 +7,8 @@ from scipy.signal import butter, filtfilt, welch
 
 FS = 30.0
 BAND = (0.7, 3.0)
-SQI_GATE = 0.5
+SQI_GATE = 0.45
+SQI_SOFT = 0.3
 
 
 def _pos_window(rgb: np.ndarray) -> np.ndarray:
@@ -35,12 +36,57 @@ def pos_stream(rgb: np.ndarray, win: int = 48) -> np.ndarray:
     return out / np.maximum(counts, 1e-8)
 
 
+def _chrom_window(rgb: np.ndarray) -> np.ndarray:
+    mu = rgb.mean(axis=0)
+    mu = np.where(np.abs(mu) < 1e-8, 1e-8, mu)
+    cn = rgb / mu - 1.0
+    x = 3 * cn[:, 0] - 2 * cn[:, 1]
+    y = 1.5 * cn[:, 0] + cn[:, 1] - 1.5 * cn[:, 2]
+    alpha = float(x.std() / (y.std() + 1e-8))
+    s = x - alpha * y
+    return s - s.mean()
+
+
+def chrom_stream(rgb: np.ndarray, win: int = 48) -> np.ndarray:
+    t = len(rgb)
+    out = np.zeros(t)
+    counts = np.zeros(t)
+    if t < win:
+        return out
+    w = np.hanning(win)
+    for start in range(0, t - win + 1):
+        h = _chrom_window(rgb[start : start + win])
+        out[start : start + win] += h * w
+        counts[start : start + win] += w
+    return out / np.maximum(counts, 1e-8)
+
+
+def green_stream(rgb: np.ndarray) -> np.ndarray:
+    g = rgb[:, 1]
+    return g - g.mean()
+
+
 def bandpass(x: np.ndarray, fs: float = FS) -> np.ndarray:
     if x.size < 30:
         return x.copy()
     lo, hi = BAND
     b, a = butter(4, [lo / (0.5 * fs), hi / (0.5 * fs)], btype="band")
     return np.asarray(filtfilt(b, a, x))
+
+
+def sqi_fft(bvp: np.ndarray, fs: float = FS) -> float:
+    """Full-trace FFT peak/band — matches Python sqa_calculator / web rppg.ts."""
+    if bvp.size < int(fs * 4):
+        return 0.0
+    x = bvp - bvp.mean()
+    spec = np.abs(np.fft.rfft(x)) ** 2
+    freqs = np.fft.rfftfreq(len(x), d=1.0 / fs)
+    lo, hi = BAND
+    mask = (freqs >= lo) & (freqs <= hi)
+    if not np.any(mask):
+        return 0.0
+    band = spec[mask]
+    return float(np.clip(band.max() / (band.sum() + 1e-12), 0.0, 1.0))
 
 
 def estimate_hr(bvp: np.ndarray, fs: float = FS) -> tuple[float | None, float]:
@@ -67,8 +113,17 @@ def estimate_hr(bvp: np.ndarray, fs: float = FS) -> tuple[float | None, float]:
 
 
 def hr_from_rgb(rgb: np.ndarray) -> tuple[float | None, float, float]:
-    bvp = pos_stream(rgb, win=min(48, len(rgb)))
-    bvp_f = bandpass(bvp)
-    hr, conf = estimate_hr(bvp_f)
-    sqi = conf
-    return (hr if sqi >= SQI_GATE else None), conf, float(sqi)
+    win = min(48, len(rgb))
+    candidates: list[tuple[np.ndarray, float, float | None, float]] = []
+    for raw in (pos_stream(rgb, win), chrom_stream(rgb, win), green_stream(rgb)):
+        bvp_f = bandpass(raw)
+        sqi = sqi_fft(bvp_f)
+        hr, conf = estimate_hr(bvp_f)
+        candidates.append((bvp_f, sqi, hr, conf))
+    candidates.sort(key=lambda c: c[1], reverse=True)
+    _, sqi, hr, conf = candidates[0]
+    if hr is None or sqi < SQI_SOFT:
+        return None, conf, float(sqi)
+    if sqi < SQI_GATE:
+        return float(hr), conf, float(sqi)  # soft: still return HR
+    return float(hr), conf, float(sqi)
