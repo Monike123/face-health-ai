@@ -25,8 +25,8 @@ app = FastAPI(title="FaceHealth AI", docs_url=None, redoc_url=None, openapi_url=
 
 
 class ScanRequest(BaseModel):
-    t_ms: list[float] = Field(min_length=300, max_length=2400)
-    rgb: list[tuple[float, float, float]] = Field(min_length=300, max_length=2400)
+    t_ms: list[float] = Field(min_length=240, max_length=2700)
+    rgb: list[tuple[float, float, float]] = Field(min_length=240, max_length=2700)
 
     @model_validator(mode="after")
     def _check(self) -> ScanRequest:
@@ -39,10 +39,10 @@ class ScanRequest(BaseModel):
         if np.any(np.diff(t) <= 0):
             raise ValueError("t_ms must be strictly increasing")
         span_s = (t[-1] - t[0]) / 1000.0
-        if not 20.0 <= span_s <= 40.0:
-            raise ValueError("scan must last 20-40 s")
-        if t.size / span_s < 10.0:
-            raise ValueError("frame rate below 10 fps")
+        if not 20.0 <= span_s <= 45.0:
+            raise ValueError("scan must last 20-45 s")
+        if t.size / span_s < 8.0:
+            raise ValueError("frame rate below 8 fps")
         if x.min() < 0.0 or x.max() > 255.0:
             raise ValueError("rgb values must be in [0, 255]")
         return self

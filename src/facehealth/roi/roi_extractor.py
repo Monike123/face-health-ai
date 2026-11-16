@@ -15,12 +15,20 @@ def load_roi_indices(path: str | Path = "configs/landmark_config.yaml") -> dict[
     return {k: list(v) for k, v in raw.items() if isinstance(v, list)}
 
 
+def _hull_pts(landmarks_xy: np.ndarray, indices: list[int]) -> np.ndarray | None:
+    pts = landmarks_xy[indices, :2].astype(np.float32)
+    if len(pts) < 3:
+        return None
+    hull = cv2.convexHull(pts)
+    return hull.reshape(-1, 2).astype(np.int32)
+
+
 def region_mean_rgb(
     bgr: np.ndarray, landmarks_xy: np.ndarray, indices: list[int]
 ) -> tuple[np.ndarray, int] | None:
-    """Mean BGR→RGB over filled polygon. Returns (rgb_mean, n_pixels) or None."""
-    pts = landmarks_xy[indices, :2].astype(np.int32)
-    if len(pts) < 3:
+    """Mean BGR→RGB over filled convex hull. Returns (rgb_mean, n_pixels) or None."""
+    pts = _hull_pts(landmarks_xy, indices)
+    if pts is None or len(pts) < 3:
         return None
     mask = np.zeros(bgr.shape[:2], dtype=np.uint8)
     cv2.fillPoly(mask, [pts], 255)
@@ -35,7 +43,7 @@ def region_mean_rgb(
 def fused_mean_rgb(
     bgr: np.ndarray, landmarks_xy: np.ndarray, regions: dict[str, list[int]]
 ) -> tuple[np.ndarray, int, list[np.ndarray]] | None:
-    """Pixel-count-weighted fusion of region means. Also returns draw polys."""
+    """Pixel-count-weighted fusion of region means. Also returns draw polys (hulls)."""
     totals = np.zeros(3, dtype=np.float64)
     weight = 0
     polys: list[np.ndarray] = []
@@ -46,7 +54,9 @@ def fused_mean_rgb(
         rgb, n = out
         totals += rgb * n
         weight += n
-        polys.append(landmarks_xy[idxs, :2].astype(np.int32))
+        hull = _hull_pts(landmarks_xy, idxs)
+        if hull is not None:
+            polys.append(hull)
     if weight < 200:
         return None
     return totals / weight, weight, polys

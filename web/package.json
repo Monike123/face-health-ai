@@ -1,19 +1,23 @@
 {
   "name": "web",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test": "tsx --test lib/**/*.test.ts",
+    "db:migrate": "node --env-file=.env.local scripts/db-migrate.mjs"
   },
   "dependencies": {
     "@clerk/nextjs": "^7.10.0",
     "@mediapipe/tasks-vision": "1.2.3",
+    "@neondatabase/serverless": "^1.0.0",
     "next": "16.4.6",
     "react": "19.3.0",
-    "react-dom": "19.3.0"
+    "react-dom": "19.3.0",
+    "resend": "^4.0.0"
   },
   "devDependencies": {
     "@tailwindcss/turbopack": "4.3.3",
@@ -23,6 +27,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.4.6",
     "tailwindcss": "4.3.3",
+    "tsx": "^4.19.0",
     "typescript": "^5"
   }
 }

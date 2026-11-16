@@ -1,11 +1,10 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
-const DEV = process.env.NEXT_PUBLIC_DEV_AUTH === "1";
 const HAS_CLERK = Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY);
 
 export default async function proxy(request: NextRequest) {
-  if (DEV || !HAS_CLERK) return NextResponse.next();
+  if (!HAS_CLERK) return NextResponse.next();
 
   const { clerkMiddleware, createRouteMatcher } = await import("@clerk/nextjs/server");
   const isProtected = createRouteMatcher(["/scan(.*)"]);

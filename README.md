@@ -1,27 +1,43 @@
 # FaceHealth AI
 
-Contactless rPPG **wellness** toolkit: estimate heart rate from a 30-second face scan.
+Contactless rPPG **wellness** toolkit: estimate heart rate from a ~30-second face scan.
 
 > **Not a medical device.** Not for diagnosis, screening, or treatment decisions.
 
+**Live:** https://face-health-ai.vercel.app  
 **Repo:** https://github.com/Monike123/face-health-ai
 
-## Web Beta (local)
+## Web preview (v0.2)
+
 ```powershell
-# web/.env.local must contain: NEXT_PUBLIC_DEV_AUTH=1
 cd web
 npm install
 npm run dev
 ```
-Open http://127.0.0.1:3000 → Start a scan. Desktop HUD still works: `python -m facehealth --live`.
 
-## Deploy to Vercel (one-time)
-1. Open: https://vercel.com/new/import?s=https://github.com/Monike123/face-health-ai
-2. Set **Root Directory** to `web`
-3. Add env var: `NEXT_PUBLIC_DEV_AUTH` = `1` (Beta without Clerk; turn off later and add Clerk keys)
-4. Deploy
+Open http://127.0.0.1:3000 → Start a scan. No account required. Optional Clerk: set `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`.
+
+Desktop HUD: `python -m facehealth --live`.
+
+### Feedback infra (Neon + Resend)
+
+```powershell
+cd web
+vercel integration add neon --name facehealth-db -e production -e preview
+vc i resend
+vercel env pull .env.local
+npm run db:migrate
+```
+
+Env: `DATABASE_URL`, `RESEND_API_KEY`, optional `RESEND_FROM`.
+
+## Deploy
+
+- **Web:** Vercel project, Root Directory `web`
+- **Python API (optional):** `vercel --cwd backend --prod` → project `facehealth-api`
 
 ## Desktop / Python
+
 ```powershell
 .\.venv\Scripts\Activate.ps1
 pip install -e ".[dev]"
@@ -30,4 +46,5 @@ python -m facehealth --live
 ```
 
 ## License / datasets
+
 See [`docs/soup_register.md`](docs/soup_register.md), [`docs/datasets/GUIDE.md`](docs/datasets/GUIDE.md).

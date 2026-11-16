@@ -22,6 +22,8 @@ Update this file whenever dependencies change. **AGPL is banned in the product p
 | Next.js / React | latest | MIT | Yes (web v0.1) | `web/` frontend |
 | @clerk/nextjs | latest | MIT | Yes (web v0.1) | Sign-up / sign-in UI |
 | @mediapipe/tasks-vision | pinned | Apache-2.0 | Yes (web v0.1) | Browser FaceLandmarker; model + WASM from Google CDN |
+| @neondatabase/serverless | ^1 | Apache-2.0 | Yes (web v0.2) | Feedback Postgres |
+| resend | ^4 | MIT | Yes (web v0.2) | Per-feedback email notify |
 | **Ultralytics YOLOv8** | — | **AGPL-3.0** | **No** | Removed from plan |
 | **InsightFace weights** | — | Often NC | **No** | Non-commercial models |
 | **rPPG-Toolbox** | — | Responsible AI Source Code License | Bench only | Do not ship code in commercial binary |

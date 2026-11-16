@@ -2,7 +2,7 @@
 
 import { Show, UserButton } from "@clerk/nextjs";
 
-/** Only mount when ClerkProvider is present (DEV_AUTH off). */
+/** Only mount when ClerkProvider is present (USE_CLERK). */
 export default function HeaderAuth() {
   return (
     <Show when="signed-in">
