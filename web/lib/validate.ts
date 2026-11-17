@@ -1,10 +1,14 @@
 /** Shared request validation for scan + feedback routes. */
 
-export type ScanBody = { t_ms: number[]; rgb: number[][] };
+export type FlashPhase = "R" | "G" | "B" | "W";
+export type ScanBody = { t_ms: number[]; rgb: number[][]; phase?: FlashPhase[] };
+
+const PHASE_OK = new Set(["R", "G", "B", "W"]);
 
 export function validateScan(body: {
   t_ms?: unknown;
   rgb?: unknown;
+  phase?: unknown;
 }): ScanBody | string {
   if (!Array.isArray(body.t_ms) || !Array.isArray(body.rgb)) return "t_ms and rgb required";
   const t_ms = body.t_ms as number[];
@@ -28,7 +32,17 @@ export function validateScan(body: {
       }
     }
   }
-  return { t_ms, rgb };
+  let phase: FlashPhase[] | undefined;
+  if (body.phase !== undefined) {
+    if (!Array.isArray(body.phase)) return "phase must be an array";
+    if (body.phase.length !== t_ms.length) return "phase must match t_ms length";
+    phase = [];
+    for (const p of body.phase) {
+      if (typeof p !== "string" || !PHASE_OK.has(p)) return "phase values must be R|G|B|W";
+      phase.push(p as FlashPhase);
+    }
+  }
+  return phase ? { t_ms, rgb, phase } : { t_ms, rgb };
 }
 
 export type FeedbackBody = {

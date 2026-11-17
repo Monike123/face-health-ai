@@ -2,7 +2,12 @@
 
 import { FaceLandmarker, FilesetResolver } from "@mediapipe/tasks-vision";
 import { useEffect, useRef, useState, type CSSProperties } from "react";
-import { hrFromTrace, liveHrEstimate, type HrResult } from "@/lib/rppg";
+import {
+  analyzeScan,
+  liveHrEstimate,
+  type FlashPhase,
+  type ScanResult,
+} from "@/lib/rppg";
 import {
   assessQuality,
   canStartScan,
@@ -24,6 +29,23 @@ function defaultTargetSeconds(): number {
   return /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent)
     ? TARGET_MOBILE_S
     : TARGET_DESKTOP_S;
+}
+
+/** R→G→B (~22% each) then W remainder — ADR-004 flash assist. */
+function flashPhaseAt(elapsed: number, target: number, steady: boolean): FlashPhase {
+  if (steady) return "W";
+  const f = Math.min(1, Math.max(0, elapsed / Math.max(target, 1)));
+  if (f < 0.22) return "R";
+  if (f < 0.44) return "G";
+  if (f < 0.66) return "B";
+  return "W";
+}
+
+function flashCss(phase: FlashPhase): string {
+  if (phase === "R") return "rgba(220, 40, 40, 0.72)";
+  if (phase === "G") return "rgba(40, 200, 80, 0.68)";
+  if (phase === "B") return "rgba(40, 90, 230, 0.68)";
+  return "rgba(255, 252, 245, 0.55)";
 }
 const DETECT_READY_MS = 66;
 const DETECT_SCAN_MS = 150;
@@ -50,6 +72,7 @@ type Facing = "user" | "environment";
 type Samples = {
   t: number[];
   rgb: [number, number, number][];
+  phase: FlashPhase[];
   missed: number;
   start: number | null;
 };
@@ -156,6 +179,8 @@ export default function ScanClient({
   const [facing, setFacing] = useState<Facing>("user");
   const [torchOn, setTorchOn] = useState(false);
   const [torchSupported, setTorchSupported] = useState(false);
+  const [steadyLight, setSteadyLight] = useState(false);
+  const [flashPhase, setFlashPhase] = useState<FlashPhase>("W");
   const [quality, setQuality] = useState<QualityFlags>(emptyQ);
   const [eyewearOverride, setEyewearOverride] = useState(false);
   const [targetSeconds, setTargetSeconds] = useState(defaultTargetSeconds);
@@ -164,7 +189,7 @@ export default function ScanClient({
   const [sampleCount, setSampleCount] = useState(0);
   const [scanProgress, setScanProgress] = useState(0);
   const [liveBpm, setLiveBpm] = useState<number | null>(null);
-  const [result, setResult] = useState<HrResult | null>(null);
+  const [result, setResult] = useState<ScanResult | null>(null);
   const [error, setError] = useState("");
   const [feedbackDone, setFeedbackDone] = useState(false);
   const [feedbackBusy, setFeedbackBusy] = useState(false);
@@ -182,7 +207,7 @@ export default function ScanClient({
   const streamRef = useRef<MediaStream | null>(null);
   const loopRef = useRef(0);
   const scanningRef = useRef(false);
-  const samplesRef = useRef<Samples>({ t: [], rgb: [], missed: 0, start: null });
+  const samplesRef = useRef<Samples>({ t: [], rgb: [], phase: [], missed: 0, start: null });
   const lastLmRef = useRef<{ x: number; y: number; z: number }[] | null>(null);
   const lastDetectRef = useRef(0);
   const lastLiveHrRef = useRef(0);
@@ -195,6 +220,7 @@ export default function ScanClient({
   const progressRef = useRef(0);
   const targetSecondsRef = useRef(defaultTargetSeconds());
   const submittingRef = useRef(false);
+  const steadyLightRef = useRef(false);
 
   useEffect(() => {
     if (phase !== "consent" || preloadStarted.current) return;
@@ -492,14 +518,17 @@ export default function ScanClient({
       if (scanning) {
         const s = samplesRef.current;
         s.start ??= now;
+        const elapsed = (now - s.start) / 1000;
+        const target = targetSecondsRef.current;
+        const useFlash = facingRef.current === "user" && !steadyLightRef.current;
+        const phase = flashPhaseAt(elapsed, target, !useFlash);
         if (fused) {
           s.t.push(now);
           s.rgb.push(fused);
+          s.phase.push(phase);
         } else {
           s.missed++;
         }
-        const elapsed = (now - s.start) / 1000;
-        const target = targetSecondsRef.current;
         // Time-only progress — never sample-driven (keeps ring/sweep/timer in sync)
         let prog = Math.min(1, elapsed / target);
         if (extendingRef.current) prog = Math.max(prog, progressRef.current);
@@ -511,6 +540,7 @@ export default function ScanClient({
           setSampleCount(s.t.length);
           setScanProgress(prog);
           setSecondsLeft(Math.max(0, Math.ceil(target - elapsed)));
+          setFlashPhase(phase);
         }
 
         if (elapsed >= 10 && s.t.length > 60 && now - lastLiveHrRef.current > 2000) {
@@ -548,16 +578,18 @@ export default function ScanClient({
 
   async function beginScan() {
     const target = defaultTargetSeconds();
-    samplesRef.current = { t: [], rgb: [], missed: 0, start: null };
+    samplesRef.current = { t: [], rgb: [], phase: [], missed: 0, start: null };
     targetSecondsRef.current = target;
     setTargetSeconds(target);
     setSecondsLeft(target);
     extendingRef.current = false;
     submittingRef.current = false;
+    steadyLightRef.current = steadyLight;
     setExtending(false);
     setLiveBpm(null);
     setSampleCount(0);
     setScanProgress(0);
+    setFlashPhase("W");
     progressRef.current = 0;
     lastLiveHrRef.current = 0;
     scanningRef.current = true;
@@ -585,6 +617,8 @@ export default function ScanClient({
       );
     const t0 = s.t[0];
     const tRel = s.t.map((t) => t - t0);
+    const phase = s.phase.length === s.t.length ? s.phase : undefined;
+    const localOpts = { faceFrac, measuredFps: fps, phase };
     try {
       const token = await getToken();
       const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -595,6 +629,7 @@ export default function ScanClient({
         body: JSON.stringify({
           t_ms: tRel,
           rgb: s.rgb,
+          phase,
           face_frac: faceFrac,
           measured_fps: fps,
         }),
@@ -606,10 +641,9 @@ export default function ScanClient({
             ? "The scan data was not usable. Please try again."
             : "Server error. Please try again in a moment.",
         );
-      let data = (await res.json()) as HrResult;
-      // Belt-and-suspenders: never show empty HR for a completed capture
-      if (data.hr_bpm === null) {
-        const local = hrFromTrace(tRel, s.rgb, { faceFrac, measuredFps: fps });
+      let data = (await res.json()) as ScanResult;
+      if (data.hr_bpm === null || !data.vitals) {
+        const local = analyzeScan(tRel, s.rgb, localOpts);
         data = { ...local, scan_id: data.scan_id || local.scan_id };
       }
       setResult(data);
@@ -620,10 +654,8 @@ export default function ScanClient({
         /* ignore */
       }
     } catch {
-      // Offline / network — still show a local estimate when possible
       try {
-        const local = hrFromTrace(tRel, s.rgb, { faceFrac, measuredFps: fps });
-        setResult(local);
+        setResult(analyzeScan(tRel, s.rgb, localOpts));
         setPhase("result");
       } catch {
         fail("Network error. Check your connection and try again.");
@@ -752,9 +784,29 @@ export default function ScanClient({
               </div>
             )}
             {facing === "user" && phase === "ready" && (
-              <p style={{ marginTop: "0.5rem", fontSize: "0.85rem", color: "var(--muted)" }}>
-                Face the screen. Bright edges help light your face.
-              </p>
+              <>
+                <p style={{ marginTop: "0.5rem", fontSize: "0.85rem", color: "var(--muted)" }}>
+                  Face the screen. The scan flashes red, green, then blue to strengthen the skin
+                  signal.
+                </p>
+                <label
+                  style={{
+                    display: "flex",
+                    gap: "0.5rem",
+                    alignItems: "flex-start",
+                    marginTop: "0.65rem",
+                    fontSize: "0.85rem",
+                    color: "var(--muted)",
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={steadyLight}
+                    onChange={(e) => setSteadyLight(e.target.checked)}
+                  />
+                  <span>Steady light only (skip RGB flash — SpO2 proxy may be unavailable)</span>
+                </label>
+              </>
             )}
             {phase === "scanning" && (
               <>
@@ -832,6 +884,9 @@ export default function ScanClient({
         {phase === "result" && result && (
           <div aria-live="polite">
             <p className="fh-kicker">Result</p>
+            <p className="fh-exp-banner">
+              Experimental research estimates — wellness only, not a medical device.
+            </p>
             <h2 style={{ margin: 0, fontSize: "0.95rem", fontWeight: 600, color: "var(--muted)" }}>
               Estimated heart rate
             </h2>
@@ -859,6 +914,38 @@ export default function ScanClient({
                 {result.confidence_reason}
               </p>
             </div>
+            {result.vitals && (
+              <div className="fh-vital-grid">
+                <VitalCard
+                  title="Blood pressure"
+                  display={
+                    result.vitals.bp.value != null && result.vitals.bp.value2 != null
+                      ? `${result.vitals.bp.value}/${result.vitals.bp.value2}`
+                      : "—"
+                  }
+                  unit={result.vitals.bp.unit}
+                  vital={result.vitals.bp}
+                />
+                <VitalCard
+                  title="SpO2 proxy"
+                  display={
+                    result.vitals.spo2.value != null ? String(result.vitals.spo2.value) : "—"
+                  }
+                  unit={result.vitals.spo2.unit}
+                  vital={result.vitals.spo2}
+                />
+                <VitalCard
+                  title="Skin warmth"
+                  display={
+                    result.vitals.temperature.value != null
+                      ? String(result.vitals.temperature.value)
+                      : "—"
+                  }
+                  unit={result.vitals.temperature.unit}
+                  vital={result.vitals.temperature}
+                />
+              </div>
+            )}
             {result.confidence_label === "Low" && (
               <p style={{ marginTop: "0.65rem", fontSize: "0.85rem", color: "var(--muted)", lineHeight: 1.45 }}>
                 Tip: brighter light and holding still usually improve the next scan.
@@ -991,6 +1078,13 @@ export default function ScanClient({
         >
           <video ref={videoRef} playsInline muted />
           <canvas ref={overlayRef} />
+          {phase === "scanning" && facing === "user" && (
+            <div
+              className="fh-flash-plane"
+              style={{ background: flashCss(flashPhase) }}
+              aria-hidden
+            />
+          )}
           {phase === "scanning" && <div className="fh-scan-sweep" aria-hidden />}
           {showCamera && (
             <div className="fh-cam-hud">
@@ -1006,6 +1100,11 @@ export default function ScanClient({
               {phase === "scanning" && (
                 <div className="fh-cam-hud-scan">
                   <span className="fh-chip">Capturing… {secondsLeft}s</span>
+                  <span className="fh-chip">
+                    {steadyLight || facing !== "user"
+                      ? "Steady light"
+                      : `Lighting ${flashPhase}…`}
+                  </span>
                   <span className="fh-chip">{sampleCount} samples</span>
                   {liveBpm !== null && <span className="fh-chip">~{liveBpm} BPM</span>}
                   <strong className="fh-cam-timer">{secondsLeft}s</strong>
@@ -1018,6 +1117,35 @@ export default function ScanClient({
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+function VitalCard({
+  title,
+  display,
+  unit,
+  vital,
+}: {
+  title: string;
+  display: string;
+  unit: string;
+  vital: ScanResult["vitals"]["bp"];
+}) {
+  const warn = vital.confidence_label === "Low" || vital.status !== "ok";
+  return (
+    <div className="fh-vital-card">
+      <p className="fh-vital-title">{title}</p>
+      <p className="fh-vital-value">
+        {display}
+        <span>{unit}</span>
+      </p>
+      <span className={`fh-tag${warn ? " fh-tag-warn" : ""}`}>
+        {vital.status === "unavailable"
+          ? "Unavailable"
+          : `Confidence · ${vital.confidence_label}`}
+      </span>
+      <p className="fh-vital-note">{vital.note}</p>
     </div>
   );
 }

@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
-import { hrFromTrace } from "./rppg";
+import { analyzeScan, hrFromTrace, type FlashPhase } from "./rppg";
 
 const root = dirname(fileURLToPath(import.meta.url));
 
@@ -36,6 +36,18 @@ function synth(
     if (t_ms[i] <= t_ms[i - 1]) t_ms[i] = t_ms[i - 1] + 1;
   }
   return { t_ms, rgb };
+}
+
+function phaseSchedule(n: number): FlashPhase[] {
+  const out: FlashPhase[] = [];
+  for (let i = 0; i < n; i++) {
+    const f = i / n;
+    if (f < 0.22) out.push("R");
+    else if (f < 0.44) out.push("G");
+    else if (f < 0.66) out.push("B");
+    else out.push("W");
+  }
+  return out;
 }
 
 describe("hrFromTrace", () => {
@@ -92,5 +104,42 @@ describe("hrFromTrace", () => {
     const r = hrFromTrace(g.t_ms, g.rgb);
     assert.ok(r.hr_bpm !== null);
     assert.ok(Math.abs(r.hr_bpm! - g.hr_bpm) <= 1.5);
+  });
+});
+
+describe("analyzeScan", () => {
+  it("returns HR plus clamped vitals with R/G/B phases", () => {
+    const { t_ms, rgb } = synth(72, 35);
+    const phase = phaseSchedule(t_ms.length);
+    const r = analyzeScan(t_ms, rgb, { phase });
+    assert.ok(r.hr_bpm !== null);
+    assert.ok(Math.abs(r.hr_bpm! - 72) < 3);
+    assert.equal(r.flash_used, true);
+    assert.ok(r.vitals.hr.value !== null);
+    assert.ok(r.vitals.bp.value !== null && r.vitals.bp.value2 !== null);
+    assert.ok(r.vitals.bp.value! >= 90 && r.vitals.bp.value! <= 160);
+    assert.ok(r.vitals.bp.value2! >= 60 && r.vitals.bp.value2! <= 100);
+    assert.ok(["Low", "Medium"].includes(r.vitals.bp.confidence_label));
+    if (r.vitals.spo2.value !== null) {
+      assert.ok(r.vitals.spo2.value >= 85 && r.vitals.spo2.value <= 100);
+      assert.equal(r.vitals.spo2.confidence_label, "Low");
+    }
+    assert.ok(r.vitals.temperature.value !== null);
+    assert.ok(r.vitals.temperature.value! >= 35.5 && r.vitals.temperature.value! <= 37.5);
+    assert.equal(r.vitals.temperature.confidence_label, "Low");
+    assert.ok(r.disclaimer.includes("not a medical device"));
+  });
+
+  it("flat RGB still publishes HR; SpO2 may be unavailable", () => {
+    const { t_ms } = synth(72, 35);
+    const rgb = t_ms.map(() => [128, 128, 128]);
+    const phase = phaseSchedule(t_ms.length);
+    const r = analyzeScan(t_ms, rgb, { phase });
+    assert.ok(r.hr_bpm !== null);
+    assert.equal(r.vitals.hr.confidence_label, "Low");
+    assert.ok(
+      r.vitals.spo2.status === "unavailable" ||
+        (r.vitals.spo2.value !== null && r.vitals.spo2.confidence_label === "Low"),
+    );
   });
 });

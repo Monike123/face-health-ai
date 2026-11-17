@@ -442,6 +442,74 @@ body {
   outline: 2px solid rgba(94, 234, 212, 0.35);
 }
 
+.fh-flash-plane {
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  mix-blend-mode: screen;
+  transition: background 0.35s linear;
+}
+
+.fh-exp-banner {
+  margin: 0 0 0.75rem;
+  padding: 0.55rem 0.7rem;
+  border-radius: 8px;
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+.fh-vital-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.65rem;
+  margin-top: 1rem;
+}
+
+@media (min-width: 520px) {
+  .fh-vital-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+.fh-vital-card {
+  padding: 0.75rem 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+}
+
+.fh-vital-title {
+  margin: 0;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.fh-vital-value {
+  margin: 0.25rem 0 0.45rem;
+  font-size: 1.35rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+}
+
+.fh-vital-value span {
+  margin-left: 0.3rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.fh-vital-note {
+  margin: 0.45rem 0 0;
+  font-size: 0.72rem;
+  line-height: 1.35;
+  color: var(--muted);
+}
+
 .fh-scan-sweep {
   pointer-events: none;
   position: absolute;

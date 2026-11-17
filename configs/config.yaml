@@ -26,6 +26,7 @@ features:
   physformer: false
   phase_net: false
   ttt: false
-  blood_pressure: false
-  spo2: false
+  # ADR-004 pitch demo — revoke after UBFC + real calibration
+  blood_pressure: true
+  spo2: true
   advanced_pad: false

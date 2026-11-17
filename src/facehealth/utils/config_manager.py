@@ -38,8 +38,8 @@ class FeaturesConfig(BaseModel):
     physformer: bool = False
     phase_net: bool = False
     ttt: bool = False
-    blood_pressure: bool = False
-    spo2: bool = False
+    blood_pressure: bool = True  # ADR-004 pitch demo
+    spo2: bool = True
     advanced_pad: bool = False
 
 

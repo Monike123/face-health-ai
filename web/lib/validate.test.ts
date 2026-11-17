@@ -28,6 +28,20 @@ describe("validateScan", () => {
     const r = validateScan(okPayload(90, 30));
     assert.equal(typeof r, "object");
   });
+
+  it("accepts matching phase array", () => {
+    const base = okPayload(90, 30);
+    const phase = base.t_ms.map((_, i) => (i < 20 ? "R" : i < 40 ? "G" : i < 60 ? "B" : "W"));
+    const r = validateScan({ ...base, phase });
+    assert.equal(typeof r, "object");
+    if (typeof r !== "string") assert.equal(r.phase?.length, 90);
+  });
+
+  it("rejects phase length mismatch", () => {
+    const base = okPayload(90, 30);
+    const r = validateScan({ ...base, phase: ["R", "G"] });
+    assert.equal(typeof r, "string");
+  });
 });
 
 describe("validateFeedback", () => {

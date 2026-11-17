@@ -355,6 +355,29 @@ function downsampleWaveform(bvp: number[], points = 120): number[] {
 
 export type ConfidenceLabel = "High" | "Medium" | "Low";
 export type RppgMethod = "POS" | "CHROM" | "Green";
+export type FlashPhase = "R" | "G" | "B" | "W";
+
+export type VitalStatus = "ok" | "low" | "unavailable";
+
+export type VitalEstimate = {
+  value: number | null;
+  /** Secondary value (e.g. DBP for BP). */
+  value2?: number | null;
+  unit: string;
+  lo?: number | null;
+  hi?: number | null;
+  confidence: number;
+  confidence_label: ConfidenceLabel;
+  status: VitalStatus;
+  note: string;
+};
+
+export type ScanVitals = {
+  hr: VitalEstimate;
+  bp: VitalEstimate;
+  spo2: VitalEstimate;
+  temperature: VitalEstimate;
+};
 
 export type HrResult = {
   scan_id: string;
@@ -370,6 +393,12 @@ export type HrResult = {
   waveform: number[];
   message: string;
   disclaimer: string;
+};
+
+/** ADR-004 multi-vital pitch result (extends HR fields). */
+export type ScanResult = HrResult & {
+  vitals: ScanVitals;
+  flash_used: boolean;
 };
 
 function newScanId(): string {
@@ -534,4 +563,200 @@ export function liveHrEstimate(tMs: number[], rgb: number[][]): number | null {
   if (span < 10) return null;
   const r = hrFromTrace(tMs, rgb);
   return r.hr_bpm !== null ? Math.round(r.hr_bpm) : null;
+}
+
+function acDc(channel: number[]): { ac: number; dc: number; pi: number } {
+  if (!channel.length) return { ac: 0, dc: 0, pi: 0 };
+  const dc = mean(channel);
+  const ac = std(channel);
+  return { ac, dc, pi: dc > 1e-6 ? (ac / dc) * 100 : 0 };
+}
+
+/**
+ * shortcut: RGB-only SpO2 is scientifically weak (P35); dual-wavelength / PURE labels to upgrade.
+ */
+function estimateSpo2Proxy(
+  rgb: number[][],
+  phase: FlashPhase[] | undefined,
+): VitalEstimate {
+  const noteBase = "Experimental SpO2 proxy from RGB flash — not a pulse oximeter.";
+  if (!phase || phase.length !== rgb.length) {
+    return {
+      value: null,
+      unit: "%",
+      confidence: 15,
+      confidence_label: "Low",
+      status: "unavailable",
+      note: `${noteBase} Need R/G flash phases.`,
+    };
+  }
+  const rChan: number[] = [];
+  const gChan: number[] = [];
+  for (let i = 0; i < rgb.length; i++) {
+    if (phase[i] === "R" || phase[i] === "G") {
+      rChan.push(rgb[i][0]);
+      gChan.push(rgb[i][1]);
+    }
+  }
+  if (rChan.length < 20) {
+    return {
+      value: null,
+      unit: "%",
+      confidence: 15,
+      confidence_label: "Low",
+      status: "unavailable",
+      note: `${noteBase} Too few flash samples.`,
+    };
+  }
+  const r = acDc(rChan);
+  const g = acDc(gChan);
+  if (r.pi < 0.05 || g.pi < 0.05 || g.ac < 1e-6) {
+    return {
+      value: null,
+      unit: "%",
+      confidence: 12,
+      confidence_label: "Low",
+      status: "unavailable",
+      note: `${noteBase} Pulse amplitude too weak.`,
+    };
+  }
+  const ratio = r.ac / r.dc / (g.ac / g.dc + 1e-8);
+  // Fixed literature-ish ratio → SpO2 map (uncalibrated)
+  let spo2 = 110 - 25 * ratio;
+  spo2 = Math.min(100, Math.max(85, spo2));
+  return {
+    value: Math.round(spo2 * 10) / 10,
+    unit: "%",
+    lo: Math.max(85, Math.round(spo2 - 3)),
+    hi: Math.min(100, Math.round(spo2 + 2)),
+    confidence: 28,
+    confidence_label: "Low",
+    status: "low",
+    note: noteBase,
+  };
+}
+
+/**
+ * shortcut: morphology BP without cuff calib is weak (P24); upgrade with IEEE 1708 + in-house face BP.
+ */
+function estimateBpProxy(bvpF: number[], hrBpm: number, sqi: number): VitalEstimate {
+  const note = "Experimental BP from pulse morphology — not cuff-validated.";
+  const amp = std(bvpF);
+  const normAmp = Math.min(1, amp / (Math.abs(mean(bvpF.map(Math.abs))) + amp + 1e-6));
+  // Adult resting prior + HR / amplitude nudges
+  let sbp = 118 + 0.35 * (hrBpm - 72) - 8 * normAmp;
+  let dbp = 76 + 0.2 * (hrBpm - 72) - 4 * normAmp;
+  sbp = Math.min(160, Math.max(90, sbp));
+  dbp = Math.min(100, Math.max(60, Math.min(dbp, sbp - 20)));
+  const strong = sqi >= SQI_GATE;
+  const confLabel: ConfidenceLabel = strong ? "Medium" : "Low";
+  const conf = strong ? 48 : 30;
+  return {
+    value: Math.round(sbp),
+    value2: Math.round(dbp),
+    unit: "mmHg",
+    lo: Math.round(sbp - 8),
+    hi: Math.round(sbp + 8),
+    confidence: conf,
+    confidence_label: confLabel,
+    status: strong ? "ok" : "low",
+    note,
+  };
+}
+
+/**
+ * shortcut: RGB cannot measure core temp; thermal IR / contact sensor to upgrade.
+ */
+function estimateTempProxy(rgb: number[][]): VitalEstimate {
+  const note = "Skin warmth proxy from facial colour — not a thermometer / not core temperature.";
+  if (rgb.length < 30) {
+    return {
+      value: null,
+      unit: "°C",
+      confidence: 10,
+      confidence_label: "Low",
+      status: "unavailable",
+      note,
+    };
+  }
+  const lum = rgb.map((row) => 0.299 * row[0] + 0.587 * row[1] + 0.114 * row[2]);
+  const rg = rgb.map((row) => row[0] - row[1]);
+  const L = mean(lum);
+  const rgM = mean(rg);
+  // Map DC luminance + R-G balance into a soft 35.5–37.5 display band
+  let t = 36.4 + ((L - 120) / 180) * 0.6 + (rgM / 40) * 0.3;
+  t = Math.min(37.5, Math.max(35.5, t));
+  return {
+    value: Math.round(t * 10) / 10,
+    unit: "°C",
+    lo: Math.round((t - 0.4) * 10) / 10,
+    hi: Math.round((t + 0.4) * 10) / 10,
+    confidence: 22,
+    confidence_label: "Low",
+    status: "low",
+    note,
+  };
+}
+
+function hrVitalFromResult(hr: HrResult): VitalEstimate {
+  return {
+    value: hr.hr_bpm,
+    unit: "BPM",
+    lo: hr.hr_lo,
+    hi: hr.hr_hi,
+    confidence: hr.confidence,
+    confidence_label: hr.confidence_label,
+    status: hr.confidence_label === "Low" ? "low" : "ok",
+    note: hr.confidence_reason,
+  };
+}
+
+/**
+ * Full pitch scan: HR + experimental BP / SpO2 / skin-warmth (ADR-004).
+ */
+export function analyzeScan(
+  tMs: number[],
+  rgb: number[][],
+  opts?: {
+    faceFrac?: number;
+    measuredFps?: number;
+    phase?: FlashPhase[];
+  },
+): ScanResult {
+  const hr = hrFromTrace(tMs, rgb, {
+    faceFrac: opts?.faceFrac,
+    measuredFps: opts?.measuredFps,
+  });
+
+  const t0 = tMs[0] ?? 0;
+  const tSec = tMs.map((t) => (t - t0) / 1000);
+  const grid = tMs.length >= 30 ? resampleRgb(tSec, rgb) : rgb;
+  const win = Math.min(48, grid.length);
+  const green = evaluateMethod("Green", greenStream(grid.length ? grid : [[128, 128, 128]]));
+  const pos = evaluateMethod("POS", posStream(grid.length ? grid : [[128, 128, 128]], win));
+  const bestBvp = pos.sqi >= green.sqi ? pos.bvpF : green.bvpF;
+
+  const phase = opts?.phase;
+  const flash_used = Boolean(phase?.some((p) => p === "R" || p === "G" || p === "B"));
+  const hrBpm = hr.hr_bpm ?? 72;
+
+  const vitals: ScanVitals = {
+    hr: hrVitalFromResult(hr),
+    bp: estimateBpProxy(bestBvp, hrBpm, hr.sqi),
+    spo2: estimateSpo2Proxy(rgb, phase),
+    temperature: estimateTempProxy(rgb),
+  };
+
+  const disclaimer =
+    "Experimental research estimates — wellness only, not a medical device. Not for diagnosis or fever screening.";
+
+  return {
+    ...hr,
+    disclaimer,
+    message: flash_used
+      ? `${hr.message} Multi-vital proxies used RGB flash assist.`
+      : `${hr.message} Multi-vital proxies (steady light — SpO2 may be unavailable).`,
+    vitals,
+    flash_used,
+  };
 }

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { hrFromTrace } from "@/lib/rppg";
+import { analyzeScan } from "@/lib/rppg";
 import { USE_CLERK } from "@/lib/dev";
 import { validateScan } from "@/lib/validate";
 
@@ -12,7 +12,13 @@ export async function POST(req: Request) {
     }
   }
 
-  let body: { t_ms?: unknown; rgb?: unknown; face_frac?: unknown; measured_fps?: unknown };
+  let body: {
+    t_ms?: unknown;
+    rgb?: unknown;
+    phase?: unknown;
+    face_frac?: unknown;
+    measured_fps?: unknown;
+  };
   try {
     body = await req.json();
   } catch {
@@ -31,6 +37,10 @@ export async function POST(req: Request) {
       ? body.measured_fps
       : undefined;
   return NextResponse.json(
-    hrFromTrace(checked.t_ms, checked.rgb, { faceFrac, measuredFps }),
+    analyzeScan(checked.t_ms, checked.rgb, {
+      faceFrac,
+      measuredFps,
+      phase: checked.phase,
+    }),
   );
 }
