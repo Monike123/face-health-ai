@@ -32,7 +32,7 @@ Plan approved and executed.
 ## QA / ship
 - [x] lint / test / build (web) + pytest / ruff / mypy (Python)
 - [x] CI web job; docs; Neon migrate on prod
-- [ ] Push + tag v0.2.0 (in progress)
+- [x] Push + tag v0.2.0 (`5aa5fa2`, tag `v0.2.0`)
 
 ## Review
 - Root causes fixed: frame starvation (throttle + bbox sampling), mobile overlay (native video size + hull ROIs), Beta labels removed.

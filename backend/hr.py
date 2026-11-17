@@ -1,4 +1,7 @@
-"""POS / CHROM / Green → bandpass → FFT SQI → Welch HR (web rppg.ts parity)."""
+"""POS / CHROM / Green → bandpass → FFT SQI → Welch HR (web rppg.ts parity).
+
+Always publish a band BPM after enough samples; Low confidence when weak.
+"""
 
 from __future__ import annotations
 
@@ -6,7 +9,7 @@ import numpy as np
 from scipy.signal import butter, filtfilt, welch
 
 FS = 30.0
-BAND = (0.7, 3.0)
+BAND = (0.7, 3.0)  # ~42–180 BPM
 SQI_GATE = 0.45
 SQI_SOFT = 0.3
 
@@ -90,7 +93,7 @@ def sqi_fft(bvp: np.ndarray, fs: float = FS) -> float:
 
 
 def estimate_hr(bvp: np.ndarray, fs: float = FS) -> tuple[float | None, float]:
-    if bvp.size < int(fs * 5):
+    if bvp.size < int(fs * 3):
         return None, 0.0
     x = bvp - bvp.mean()
     nperseg = min(len(x), max(64, int(fs * 8)))
@@ -112,7 +115,28 @@ def estimate_hr(bvp: np.ndarray, fs: float = FS) -> tuple[float | None, float]:
     return 60.0 * f_peak, conf
 
 
+def force_band_hr(bvp: np.ndarray, fs: float = FS) -> tuple[float, float]:
+    """Argmax power in band even at low peakRatio (always-publish)."""
+    x = bvp - bvp.mean()
+    if float(x.std()) < 1e-8:
+        return 72.0, 0.05
+    spec = np.abs(np.fft.rfft(x)) ** 2
+    freqs = np.fft.rfftfreq(len(x), d=1.0 / fs)
+    lo, hi = BAND
+    mask = (freqs >= lo) & (freqs <= hi)
+    if not np.any(mask):
+        return 72.0, 0.05
+    band_f, band_p = freqs[mask], spec[mask]
+    k = int(np.argmax(band_p))
+    hr = float(60.0 * band_f[k])
+    conf = float(np.clip(band_p[k] / (band_p.sum() + 1e-12), 0.05, 1.0))
+    return float(np.clip(hr, 45.0, 180.0)), conf
+
+
 def hr_from_rgb(rgb: np.ndarray) -> tuple[float | None, float, float]:
+    """Return (hr_bpm, conf, sqi). Always publishes band BPM when rgb is long enough."""
+    if len(rgb) < 30:
+        return 72.0, 0.1, 0.0
     win = min(48, len(rgb))
     candidates: list[tuple[np.ndarray, float, float | None, float]] = []
     for raw in (pos_stream(rgb, win), chrom_stream(rgb, win), green_stream(rgb)):
@@ -121,9 +145,8 @@ def hr_from_rgb(rgb: np.ndarray) -> tuple[float | None, float, float]:
         hr, conf = estimate_hr(bvp_f)
         candidates.append((bvp_f, sqi, hr, conf))
     candidates.sort(key=lambda c: c[1], reverse=True)
-    _, sqi, hr, conf = candidates[0]
-    if hr is None or sqi < SQI_SOFT:
-        return None, conf, float(sqi)
-    if sqi < SQI_GATE:
-        return float(hr), conf, float(sqi)  # soft: still return HR
-    return float(hr), conf, float(sqi)
+    bvp_f, sqi, hr, conf = candidates[0]
+    if hr is None or hr < 45 or hr > 180 or sqi < SQI_SOFT:
+        hr, conf = force_band_hr(bvp_f)
+    hr = float(np.clip(hr, 45.0, 180.0))
+    return hr, float(conf), float(sqi)

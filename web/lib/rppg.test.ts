@@ -49,12 +49,24 @@ describe("hrFromTrace", () => {
     assert.ok(["POS", "CHROM", "Green"].includes(r.method));
   });
 
-  it("gates pure noise", () => {
+  it("always publishes band BPM for flat RGB with Low confidence", () => {
     const { t_ms } = synth(72);
     const rgb = t_ms.map(() => [128, 128, 128]);
     const r = hrFromTrace(t_ms, rgb);
-    assert.equal(r.hr_bpm, null);
+    assert.ok(r.hr_bpm !== null);
+    assert.ok(r.hr_bpm! >= 45 && r.hr_bpm! <= 180);
+    assert.equal(r.confidence_label, "Low");
     assert.equal(r.quality, "low");
+    assert.ok(!r.message.includes("could not get a clear reading"));
+  });
+
+  it("always publishes band BPM for pure noise with Low confidence", () => {
+    const { t_ms, rgb } = synth(72, 35, 30, 9, 0, 8);
+    const r = hrFromTrace(t_ms, rgb);
+    assert.ok(r.hr_bpm !== null);
+    assert.ok(r.hr_bpm! >= 45 && r.hr_bpm! <= 180);
+    assert.equal(r.confidence_label, "Low");
+    assert.ok(r.hr_lo !== null && r.hr_hi !== null);
   });
 
   it("recovers HR from weak-amplitude mobile-like signal", () => {

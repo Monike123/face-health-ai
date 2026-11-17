@@ -454,15 +454,18 @@ body {
     rgba(94, 234, 212, 0.18),
     transparent
   );
-  animation: fhSweep 2.4s ease-in-out infinite;
+  /* Duration locked to capture window via --fh-scan-s on .fh-cam */
+  animation: fhSweep var(--fh-scan-s, 40s) linear 1 forwards;
 }
 
 @keyframes fhSweep {
   from {
     top: 8%;
+    opacity: 1;
   }
   to {
     top: 68%;
+    opacity: 0.35;
   }
 }
 

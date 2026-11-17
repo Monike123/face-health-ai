@@ -10,7 +10,7 @@ export function validateScan(body: {
   const t_ms = body.t_ms as number[];
   const rgb = body.rgb as number[][];
   if (t_ms.length !== rgb.length) return "t_ms and rgb must have the same length";
-  if (t_ms.length < 120 || t_ms.length > 3600) return "sample count out of range";
+  if (t_ms.length < 90 || t_ms.length > 3600) return "sample count out of range";
   for (let i = 0; i < t_ms.length; i++) {
     if (typeof t_ms[i] !== "number" || !Number.isFinite(t_ms[i])) return "t_ms must be finite";
   }

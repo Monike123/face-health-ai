@@ -23,6 +23,11 @@ describe("validateScan", () => {
     const r = validateScan(okPayload(180, 45));
     assert.equal(typeof r, "object");
   });
+
+  it("accepts 90 samples over 30s (~3 fps)", () => {
+    const r = validateScan(okPayload(90, 30));
+    assert.equal(typeof r, "object");
+  });
 });
 
 describe("validateFeedback", () => {

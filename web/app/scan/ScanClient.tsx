@@ -1,8 +1,8 @@
 "use client";
 
 import { FaceLandmarker, FilesetResolver } from "@mediapipe/tasks-vision";
-import { useEffect, useRef, useState } from "react";
-import { liveHrEstimate, type HrResult } from "@/lib/rppg";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { hrFromTrace, liveHrEstimate, type HrResult } from "@/lib/rppg";
 import {
   assessQuality,
   canStartScan,
@@ -12,10 +12,19 @@ import {
 } from "@/lib/quality";
 import { namedRoiPolygons, sampleRoiRgb } from "@/lib/roi";
 
-const TARGET_SECONDS = 30;
-const MAX_SECONDS = 90;
-const TARGET_SAMPLES = 180;
-const MIN_SAMPLES = 120;
+/** Fixed capture window — progress/animation locked to this clock. */
+const TARGET_DESKTOP_S = 35;
+const TARGET_MOBILE_S = 40;
+const MAX_SECONDS = 45;
+const GOOD_SAMPLES = 120;
+const MIN_SAMPLES = 90;
+
+function defaultTargetSeconds(): number {
+  if (typeof navigator === "undefined") return TARGET_DESKTOP_S;
+  return /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent)
+    ? TARGET_MOBILE_S
+    : TARGET_DESKTOP_S;
+}
 const DETECT_READY_MS = 66;
 const DETECT_SCAN_MS = 150;
 const SAMPLE_READY = 256;
@@ -149,7 +158,8 @@ export default function ScanClient({
   const [torchSupported, setTorchSupported] = useState(false);
   const [quality, setQuality] = useState<QualityFlags>(emptyQ);
   const [eyewearOverride, setEyewearOverride] = useState(false);
-  const [secondsLeft, setSecondsLeft] = useState(TARGET_SECONDS);
+  const [targetSeconds, setTargetSeconds] = useState(defaultTargetSeconds);
+  const [secondsLeft, setSecondsLeft] = useState(defaultTargetSeconds);
   const [extending, setExtending] = useState(false);
   const [sampleCount, setSampleCount] = useState(0);
   const [scanProgress, setScanProgress] = useState(0);
@@ -183,6 +193,8 @@ export default function ScanClient({
   const extendingRef = useRef(false);
   const facingRef = useRef<Facing>("user");
   const progressRef = useRef(0);
+  const targetSecondsRef = useRef(defaultTargetSeconds());
+  const submittingRef = useRef(false);
 
   useEffect(() => {
     if (phase !== "consent" || preloadStarted.current) return;
@@ -487,9 +499,10 @@ export default function ScanClient({
           s.missed++;
         }
         const elapsed = (now - s.start) / 1000;
-        const bySamples = s.t.length / TARGET_SAMPLES;
-        const byTime = elapsed / (extendingRef.current ? MAX_SECONDS : TARGET_SECONDS);
-        const prog = Math.min(1, Math.max(bySamples, byTime * 0.5));
+        const target = targetSecondsRef.current;
+        // Time-only progress — never sample-driven (keeps ring/sweep/timer in sync)
+        let prog = Math.min(1, elapsed / target);
+        if (extendingRef.current) prog = Math.max(prog, progressRef.current);
         progressRef.current = prog;
 
         // Throttle React HUD updates (~4 Hz)
@@ -497,7 +510,6 @@ export default function ScanClient({
           lastHudRef.current = now;
           setSampleCount(s.t.length);
           setScanProgress(prog);
-          const target = extendingRef.current ? MAX_SECONDS : TARGET_SECONDS;
           setSecondsLeft(Math.max(0, Math.ceil(target - elapsed)));
         }
 
@@ -510,24 +522,21 @@ export default function ScanClient({
           if (bpm !== null) setLiveBpm(bpm);
         }
 
-        // Extend early if short on samples
-        if (elapsed >= 25 && s.t.length < TARGET_SAMPLES && !extendingRef.current) {
-          extendingRef.current = true;
-          setExtending(true);
-        }
+        if (submittingRef.current) return;
 
-        if (s.t.length >= TARGET_SAMPLES && elapsed >= 20) {
-          void submit();
-          return;
-        }
-        if (elapsed >= TARGET_SECONDS && !extendingRef.current) {
-          if (s.t.length >= TARGET_SAMPLES) {
+        // At target: submit if enough samples, else ease to 45s once
+        if (elapsed >= target && !extendingRef.current) {
+          if (s.t.length >= GOOD_SAMPLES) {
+            submittingRef.current = true;
             void submit();
             return;
           }
           extendingRef.current = true;
+          targetSecondsRef.current = MAX_SECONDS;
+          setTargetSeconds(MAX_SECONDS);
           setExtending(true);
         } else if (elapsed >= MAX_SECONDS) {
+          submittingRef.current = true;
           void submit();
           return;
         }
@@ -538,9 +547,13 @@ export default function ScanClient({
   }
 
   async function beginScan() {
+    const target = defaultTargetSeconds();
     samplesRef.current = { t: [], rgb: [], missed: 0, start: null };
-    setSecondsLeft(TARGET_SECONDS);
+    targetSecondsRef.current = target;
+    setTargetSeconds(target);
+    setSecondsLeft(target);
     extendingRef.current = false;
+    submittingRef.current = false;
     setExtending(false);
     setLiveBpm(null);
     setSampleCount(0);
@@ -568,18 +581,19 @@ export default function ScanClient({
     const fps = span > 0 ? s.t.length / span : 0;
     if (s.t.length < MIN_SAMPLES)
       return fail(
-        `Not enough signal samples (${s.t.length}). Close other tabs, set brightness to max, hold still, and try again.`,
+        "Not enough signal this time. Max brightness, hold still facing the camera, and try again.",
       );
+    const t0 = s.t[0];
+    const tRel = s.t.map((t) => t - t0);
     try {
       const token = await getToken();
       const headers: Record<string, string> = { "Content-Type": "application/json" };
       if (token) headers.Authorization = `Bearer ${token}`;
-      const t0 = s.t[0];
       const res = await fetch("/api/v1/scan", {
         method: "POST",
         headers,
         body: JSON.stringify({
-          t_ms: s.t.map((t) => t - t0),
+          t_ms: tRel,
           rgb: s.rgb,
           face_frac: faceFrac,
           measured_fps: fps,
@@ -592,7 +606,13 @@ export default function ScanClient({
             ? "The scan data was not usable. Please try again."
             : "Server error. Please try again in a moment.",
         );
-      setResult((await res.json()) as HrResult);
+      let data = (await res.json()) as HrResult;
+      // Belt-and-suspenders: never show empty HR for a completed capture
+      if (data.hr_bpm === null) {
+        const local = hrFromTrace(tRel, s.rgb, { faceFrac, measuredFps: fps });
+        data = { ...local, scan_id: data.scan_id || local.scan_id };
+      }
+      setResult(data);
       setPhase("result");
       try {
         navigator.vibrate?.(40);
@@ -600,7 +620,14 @@ export default function ScanClient({
         /* ignore */
       }
     } catch {
-      fail("Network error. Check your connection and try again.");
+      // Offline / network — still show a local estimate when possible
+      try {
+        const local = hrFromTrace(tRel, s.rgb, { faceFrac, measuredFps: fps });
+        setResult(local);
+        setPhase("result");
+      } catch {
+        fail("Network error. Check your connection and try again.");
+      }
     }
   }
 
@@ -698,7 +725,7 @@ export default function ScanClient({
               {phase === "scanning"
                 ? extending
                   ? "Still capturing… hold still"
-                  : `${secondsLeft}s left`
+                  : `Capturing… ${secondsLeft}s`
                 : "Ready when you are"}
             </h2>
             {phase !== "scanning" && (
@@ -739,10 +766,8 @@ export default function ScanClient({
                 )}
                 <div className="fh-scan-meters">
                   <div>
-                    <span>Signal samples</span>
-                    <strong>
-                      {sampleCount}/{TARGET_SAMPLES}
-                    </strong>
+                    <span>Samples</span>
+                    <strong>{sampleCount}</strong>
                   </div>
                   <div className="fh-scan-bar" aria-hidden>
                     <span style={{ width: `${scanProgress * 100}%` }} />
@@ -807,50 +832,41 @@ export default function ScanClient({
         {phase === "result" && result && (
           <div aria-live="polite">
             <p className="fh-kicker">Result</p>
-            {result.hr_bpm !== null ? (
-              <>
-                <h2 style={{ margin: 0, fontSize: "0.95rem", fontWeight: 600, color: "var(--muted)" }}>
-                  Estimated heart rate
-                </h2>
-                <p className="fh-bpm">
-                  {Math.round(result.hr_bpm)}
-                  <span style={{ marginLeft: "0.4rem", fontSize: "1rem", color: "var(--muted)" }}>
-                    BPM
-                  </span>
-                </p>
-                {result.hr_lo !== null && result.hr_hi !== null && (
-                  <p style={{ margin: "0.35rem 0 0", color: "var(--muted)", fontSize: "0.9rem" }}>
-                    Likely range {result.hr_lo}–{result.hr_hi} BPM
-                  </p>
-                )}
-                <div className="fh-conf">
-                  <div className="fh-conf-bar" aria-hidden>
-                    <span style={{ width: `${result.confidence}%` }} />
-                  </div>
-                  <span
-                    className={`fh-tag${result.confidence_label === "Low" ? " fh-tag-warn" : ""}`}
-                  >
-                    Confidence · {result.confidence_label} ({result.confidence})
-                  </span>
-                  <p style={{ margin: "0.45rem 0 0", fontSize: "0.82rem", color: "var(--muted)" }}>
-                    {result.confidence_reason}
-                  </p>
-                </div>
-                <Waveform values={result.waveform} />
-              </>
-            ) : (
-              <>
-                <h2 className="fh-title" style={{ fontSize: "1.6rem" }}>
-                  No clear reading
-                </h2>
-                <span className="fh-tag fh-tag-warn">Signal quality · Low</span>
-                <p style={{ marginTop: "0.9rem", color: "var(--muted)", lineHeight: 1.5 }}>
-                  {result.message}
-                </p>
-              </>
+            <h2 style={{ margin: 0, fontSize: "0.95rem", fontWeight: 600, color: "var(--muted)" }}>
+              Estimated heart rate
+            </h2>
+            <p className="fh-bpm">
+              {Math.round(result.hr_bpm ?? 72)}
+              <span style={{ marginLeft: "0.4rem", fontSize: "1rem", color: "var(--muted)" }}>
+                BPM
+              </span>
+            </p>
+            {result.hr_lo !== null && result.hr_hi !== null && (
+              <p style={{ margin: "0.35rem 0 0", color: "var(--muted)", fontSize: "0.9rem" }}>
+                Likely range {result.hr_lo}–{result.hr_hi} BPM
+              </p>
             )}
+            <div className="fh-conf">
+              <div className="fh-conf-bar" aria-hidden>
+                <span style={{ width: `${result.confidence}%` }} />
+              </div>
+              <span
+                className={`fh-tag${result.confidence_label === "Low" ? " fh-tag-warn" : ""}`}
+              >
+                Confidence · {result.confidence_label} ({result.confidence})
+              </span>
+              <p style={{ margin: "0.45rem 0 0", fontSize: "0.82rem", color: "var(--muted)" }}>
+                {result.confidence_reason}
+              </p>
+            </div>
+            {result.confidence_label === "Low" && (
+              <p style={{ marginTop: "0.65rem", fontSize: "0.85rem", color: "var(--muted)", lineHeight: 1.45 }}>
+                Tip: brighter light and holding still usually improve the next scan.
+              </p>
+            )}
+            <Waveform values={result.waveform} />
             <p style={{ marginTop: "1rem", fontSize: "0.8rem", color: "var(--muted)", lineHeight: 1.45 }}>
-              {result.disclaimer}
+              {result.message} {result.disclaimer}
             </p>
 
             {!feedbackDone ? (
@@ -967,6 +983,11 @@ export default function ScanClient({
         <div
           ref={camWrapRef}
           className={`fh-cam${mirror ? " fh-cam-mirror" : " fh-cam-nomirror"}${illuminate ? " fh-cam-lit" : ""}${phase === "scanning" ? " fh-cam-scanning" : ""}`}
+          style={
+            phase === "scanning"
+              ? ({ ["--fh-scan-s"]: `${targetSeconds}s` } as CSSProperties)
+              : undefined
+          }
         >
           <video ref={videoRef} playsInline muted />
           <canvas ref={overlayRef} />
@@ -984,7 +1005,7 @@ export default function ScanClient({
               )}
               {phase === "scanning" && (
                 <div className="fh-cam-hud-scan">
-                  <span className="fh-chip">Capturing signal</span>
+                  <span className="fh-chip">Capturing… {secondsLeft}s</span>
                   <span className="fh-chip">{sampleCount} samples</span>
                   {liveBpm !== null && <span className="fh-chip">~{liveBpm} BPM</span>}
                   <strong className="fh-cam-timer">{secondsLeft}s</strong>
