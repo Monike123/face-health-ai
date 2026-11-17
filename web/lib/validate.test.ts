@@ -15,8 +15,13 @@ describe("validateScan", () => {
   });
 
   it("rejects low fps", () => {
-    const r = validateScan(okPayload(200, 30));
+    const r = validateScan(okPayload(50, 30)); // ~1.7 fps
     assert.equal(typeof r, "string");
+  });
+
+  it("accepts slow mobile capture ~4 fps over 45s", () => {
+    const r = validateScan(okPayload(180, 45));
+    assert.equal(typeof r, "object");
   });
 });
 

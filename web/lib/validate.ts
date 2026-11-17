@@ -10,7 +10,7 @@ export function validateScan(body: {
   const t_ms = body.t_ms as number[];
   const rgb = body.rgb as number[][];
   if (t_ms.length !== rgb.length) return "t_ms and rgb must have the same length";
-  if (t_ms.length < 240 || t_ms.length > 2700) return "sample count out of range";
+  if (t_ms.length < 120 || t_ms.length > 3600) return "sample count out of range";
   for (let i = 0; i < t_ms.length; i++) {
     if (typeof t_ms[i] !== "number" || !Number.isFinite(t_ms[i])) return "t_ms must be finite";
   }
@@ -18,8 +18,8 @@ export function validateScan(body: {
     if (!(t_ms[i] > t_ms[i - 1])) return "t_ms must be strictly increasing";
   }
   const span = (t_ms[t_ms.length - 1] - t_ms[0]) / 1000;
-  if (span < 20 || span > 45) return "scan must last 20-45 s";
-  if (t_ms.length / span < 8) return "frame rate below 8 fps";
+  if (span < 20 || span > 95) return "scan must last 20-95 s";
+  if (t_ms.length / span < 3) return "frame rate below 3 fps";
   for (const row of rgb) {
     if (!Array.isArray(row) || row.length !== 3) return "rgb rows must be [R,G,B]";
     for (const v of row) {

@@ -19,9 +19,7 @@ export default function Shell({ children }: { children: React.ReactNode }) {
         </nav>
       </header>
       <main className="fh-main">{children}</main>
-      <footer className="fh-footer">
-        Preview build v0.2 · Wellness use only, not a medical device
-      </footer>
+      <footer className="fh-footer">Wellness use only, not a medical device</footer>
     </div>
   );
 }

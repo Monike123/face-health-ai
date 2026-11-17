@@ -1,33 +1,29 @@
 # FaceHealth — Have vs Remaining
 
-Last update: 2026-11-17 (v0.2)
+Last update: 2026-11-17
 
-## Have (done)
+## Have
 
 | Area | Status | How to run |
 | :--- | :--- | :--- |
-| Project scaffold / config / CI / SOUP / ADR | Done | `pytest -q` |
-| Live M1 HUD (landmarks → POS → HR) | Done | `python -m facehealth --live` |
-| Web v0.2 scan (throttle, ROI hulls, quality, confidence, feedback) | Done | `cd web && npm run dev` |
-| Neon feedback + Resend notify | Code ready | needs `vercel integration add neon` + `vc i resend` |
-| Python FastAPI on Vercel (`backend/`) | Ready to deploy | `vercel --cwd backend --prod` |
-| ADR-003 feedback storage | Done | `docs/adr/ADR-003-feedback-storage-neon.md` |
+| Classical POS / CHROM / Green + FFT SQI | Done | Web scan + `pytest` |
+| Live web demo (mobile-tolerant capture) | Done | https://face-health-ai.vercel.app |
+| Feedback → Neon | Done | `/api/v1/feedback` |
+| Python FastAPI parity project | Done | https://facehealth-api.vercel.app |
+| Product docs | Done | `README.md`, `docs/PRODUCT.md` |
 
-### Local web (open demo)
+## Remaining
+
+| Item | Blocker | Next |
+| :--- | :--- | :--- |
+| Resend notify on every feedback | Domain or API key | Marketplace domain or `RESEND_API_KEY` |
+| UBFC-rPPG on disk | Author access | `docs/datasets/REQUEST_EMAILS.md` |
+| Classical MAE ≤ 2.5 BPM | Needs UBFC | Then PhysNet / ONNX only if better |
+
+## Local web
 
 ```powershell
 cd web
 npm install
 npm run dev
 ```
-
-Open http://127.0.0.1:3000. No `DEV_AUTH` flag. Clerk only if publishable key is set.
-
-## Remaining
-
-| Item | Blocker | Next action |
-| :--- | :--- | :--- |
-| Neon + Resend live on Vercel | Marketplace approve once | Run CLI commands in README |
-| Gate A/B/C device checks | Human | Laptop + Android matrix |
-| **UBFC-rPPG** | Author access | `docs/datasets/REQUEST_EMAILS.md` |
-| Full PhysNet train | UBFC on disk + MAE gate | Phase E after classical ≤ 2.5 BPM |

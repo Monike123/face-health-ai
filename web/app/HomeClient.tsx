@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import { USE_CLERK } from "@/lib/dev";
 import HomeActions from "./HomeActions";
 
@@ -70,29 +71,25 @@ export default function HomeClient() {
           </li>
           <li>
             <strong>Open access</strong>
-            <span>No account required for this preview.</span>
+            <span>No account required.</span>
           </li>
         </ul>
       </div>
 
-      <aside className="fh-preview" aria-hidden>
-        <svg viewBox="0 0 320 400" className="fh-preview-svg" width="100%" height="100%">
-          <rect width="320" height="400" fill="#12100e" />
-          <ellipse cx="160" cy="190" rx="72" ry="100" fill="none" stroke="#5eead4" strokeWidth="2" opacity="0.7" />
-          <path
-            d="M70 300 C110 250, 210 250, 250 300"
-            fill="none"
-            stroke="#d7ebe1"
-            strokeWidth="1.5"
-            opacity="0.5"
-          />
-          <text x="24" y="36" fill="rgba(243,239,231,0.7)" fontSize="12" fontFamily="sans-serif">
-            Face guide
-          </text>
-          <text x="24" y="372" fill="rgba(243,239,231,0.55)" fontSize="11" fontFamily="sans-serif">
-            ~30s · POS · wellness only
-          </text>
-        </svg>
+      <aside className="fh-preview">
+        <Image
+          src="/face-guide.jpg"
+          alt="Reference: face the camera with forehead and cheeks clearly lit"
+          fill
+          className="fh-preview-photo"
+          sizes="(max-width: 900px) 100vw, 28rem"
+          priority
+        />
+        <div className="fh-preview-oval" aria-hidden />
+        <div className="fh-preview-caption">
+          <span>Hold your face like this</span>
+          <span>Wellness use only</span>
+        </div>
       </aside>
     </section>
   );

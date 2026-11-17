@@ -13,14 +13,18 @@ import {
 import { namedRoiPolygons, sampleRoiRgb } from "@/lib/roi";
 
 const TARGET_SECONDS = 30;
-const MAX_SECONDS = 45;
-const MIN_SAMPLES = 240;
-const DETECT_EVERY_MS = 66;
-const SAMPLE_LONG = 256;
+const MAX_SECONDS = 90;
+const TARGET_SAMPLES = 180;
+const MIN_SAMPLES = 120;
+const DETECT_READY_MS = 66;
+const DETECT_SCAN_MS = 150;
+const SAMPLE_READY = 256;
+const SAMPLE_SCAN = 160;
 const MP_VERSION = "1.2.3";
 const WASM_URL = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP_VERSION}/wasm`;
 const MODEL_URL =
   "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task";
+/** Backend / feedback only — never shown in UI. */
 const APP_VERSION = "0.2.1";
 
 type Phase =
@@ -41,7 +45,7 @@ type Samples = {
   start: number | null;
 };
 
-async function createLandmarker(): Promise<{ lm: FaceLandmarker; delegate: string }> {
+async function createLandmarker(): Promise<FaceLandmarker> {
   const fileset = await FilesetResolver.forVisionTasks(WASM_URL);
   const make = (delegate: "GPU" | "CPU") =>
     FaceLandmarker.createFromOptions(fileset, {
@@ -50,9 +54,9 @@ async function createLandmarker(): Promise<{ lm: FaceLandmarker; delegate: strin
       numFaces: 1,
     });
   try {
-    return { lm: await make("GPU"), delegate: "GPU" };
+    return await make("GPU");
   } catch {
-    return { lm: await make("CPU"), delegate: "CPU" };
+    return make("CPU");
   }
 }
 
@@ -90,11 +94,36 @@ function faceOval(
     if (p.x > maxX) maxX = p.x;
     if (p.y > maxY) maxY = p.y;
   }
-  const cx = ((minX + maxX) / 2) * ow;
-  const cy = ((minY + maxY) / 2) * oh;
-  const rx = ((maxX - minX) / 2) * ow * 1.15;
-  const ry = ((maxY - minY) / 2) * oh * 1.2;
-  return { cx, cy, rx, ry };
+  return {
+    cx: ((minX + maxX) / 2) * ow,
+    cy: ((minY + maxY) / 2) * oh,
+    rx: ((maxX - minX) / 2) * ow * 1.15,
+    ry: ((maxY - minY) / 2) * oh * 1.2,
+  };
+}
+
+function drawProgressRing(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  rx: number,
+  ry: number,
+  progress: number,
+) {
+  const p = Math.max(0, Math.min(1, progress));
+  ctx.save();
+  ctx.strokeStyle = "rgba(255,255,255,0.2)";
+  ctx.lineWidth = Math.max(4, rx * 0.06);
+  ctx.beginPath();
+  ctx.ellipse(cx, cy, rx + ctx.lineWidth, ry + ctx.lineWidth, 0, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.strokeStyle = "#5eead4";
+  ctx.lineCap = "round";
+  const pad = ctx.lineWidth;
+  ctx.beginPath();
+  ctx.ellipse(cx, cy, rx + pad, ry + pad, 0, -Math.PI / 2, -Math.PI / 2 + p * Math.PI * 2);
+  ctx.stroke();
+  ctx.restore();
 }
 
 const emptyQ: QualityFlags = {
@@ -122,6 +151,8 @@ export default function ScanClient({
   const [eyewearOverride, setEyewearOverride] = useState(false);
   const [secondsLeft, setSecondsLeft] = useState(TARGET_SECONDS);
   const [extending, setExtending] = useState(false);
+  const [sampleCount, setSampleCount] = useState(0);
+  const [scanProgress, setScanProgress] = useState(0);
   const [liveBpm, setLiveBpm] = useState<number | null>(null);
   const [result, setResult] = useState<HrResult | null>(null);
   const [error, setError] = useState("");
@@ -144,17 +175,20 @@ export default function ScanClient({
   const samplesRef = useRef<Samples>({ t: [], rgb: [], missed: 0, start: null });
   const lastLmRef = useRef<{ x: number; y: number; z: number }[] | null>(null);
   const lastDetectRef = useRef(0);
+  const lastLiveHrRef = useRef(0);
+  const lastHudRef = useRef(0);
   const wakeRef = useRef<{ release: () => Promise<void> } | null>(null);
-  const sampleSizeRef = useRef({ w: SAMPLE_LONG, h: Math.round((SAMPLE_LONG * 3) / 4) });
+  const sampleSizeRef = useRef({ w: SAMPLE_READY, h: Math.round((SAMPLE_READY * 3) / 4) });
   const preloadStarted = useRef(false);
   const extendingRef = useRef(false);
   const facingRef = useRef<Facing>("user");
+  const progressRef = useRef(0);
 
   useEffect(() => {
     if (phase !== "consent" || preloadStarted.current) return;
     preloadStarted.current = true;
     void createLandmarker()
-      .then(({ lm }) => {
+      .then((lm) => {
         landmarkerRef.current = lm;
       })
       .catch(() => {});
@@ -224,16 +258,15 @@ export default function ScanClient({
     }
   }
 
-  function syncOverlaySize() {
+  function syncOverlaySize(scanning: boolean) {
     const video = videoRef.current;
     const overlay = overlayRef.current;
     if (!video || !overlay || !video.videoWidth) return;
     overlay.width = video.videoWidth;
     overlay.height = video.videoHeight;
     const aspect = video.videoWidth / video.videoHeight;
-    const w = SAMPLE_LONG;
-    const h = Math.max(64, Math.round(w / aspect));
-    sampleSizeRef.current = { w, h };
+    const long = scanning ? SAMPLE_SCAN : SAMPLE_READY;
+    sampleSizeRef.current = { w: long, h: Math.max(64, Math.round(long / aspect)) };
   }
 
   async function openStream(mode: Facing) {
@@ -257,8 +290,8 @@ export default function ScanClient({
     const video = videoRef.current!;
     video.srcObject = stream;
     await video.play();
-    syncOverlaySize();
-    video.onloadedmetadata = () => syncOverlaySize();
+    syncOverlaySize(false);
+    video.onloadedmetadata = () => syncOverlaySize(scanningRef.current);
   }
 
   async function startCamera() {
@@ -267,13 +300,12 @@ export default function ScanClient({
     setResult(null);
     setFeedbackDone(false);
     setLiveBpm(null);
+    setSampleCount(0);
+    setScanProgress(0);
     setEyewearOverride(false);
     resetQualityState();
     try {
-      if (!landmarkerRef.current) {
-        const { lm } = await createLandmarker();
-        landmarkerRef.current = lm;
-      }
+      landmarkerRef.current ??= await createLandmarker();
       await openStream(facingRef.current);
       setPhase("ready");
       startLoop();
@@ -287,7 +319,7 @@ export default function ScanClient({
     setPhase("loading");
     resetQualityState();
     try {
-      loopRef.current++; // stop current loop
+      loopRef.current++;
       await openStream(mode);
       setPhase("ready");
       startLoop();
@@ -332,16 +364,17 @@ export default function ScanClient({
       const overlay = overlayRef.current;
       if (id !== loopRef.current || !video || !lmApi || !overlay) return;
 
+      const scanning = scanningRef.current;
       const timeMoved = video.currentTime !== lastVideoTime;
       if (!timeMoved) {
         stallCount++;
-        // Some mobile browsers stall currentTime; still sample with wall clock.
-        if (stallCount < 3 || !scanningRef.current) return schedule(tick);
+        if (stallCount < 3 || !scanning) return schedule(tick);
       } else {
         stallCount = 0;
         lastVideoTime = video.currentTime;
       }
 
+      syncOverlaySize(scanning);
       const { w: sw, h: sh } = sampleSizeRef.current;
       if (frame.width !== sw || frame.height !== sh) {
         frame.width = sw;
@@ -350,9 +383,8 @@ export default function ScanClient({
         mask.height = sh;
       }
 
-      const detectNow =
-        scanningRef.current || now - lastDetectRef.current >= DETECT_EVERY_MS;
-      if (detectNow) {
+      const detectEvery = scanning ? DETECT_SCAN_MS : DETECT_READY_MS;
+      if (now - lastDetectRef.current >= detectEvery) {
         lastDetectRef.current = now;
         const det = lmApi.detectForVideo(video, now).faceLandmarks[0];
         lastLmRef.current = det ?? null;
@@ -365,57 +397,78 @@ export default function ScanClient({
       octx.clearRect(0, 0, ow, oh);
 
       let fused: [number, number, number] | null = null;
-      let regionRgb: Record<string, [number, number, number] | null> = {};
 
       if (face) {
-        const named = namedRoiPolygons(face, ow, oh);
-        const polys = Object.values(named);
         const oval = faceOval(face, ow, oh);
-        const qProbe = assessQuality({
-          landmarks: face,
-          fusedRgb: null,
-          regionRgb: {},
-          frame: null,
-          sampleW: sw,
-          sampleH: sh,
-          now,
-        });
-        octx.strokeStyle = guideColor(qProbe);
-        octx.lineWidth = Math.max(2, ow * 0.004);
-        octx.beginPath();
-        octx.ellipse(oval.cx, oval.cy, oval.rx, oval.ry, 0, 0, Math.PI * 2);
-        octx.stroke();
 
-        octx.fillStyle = "rgba(94, 234, 212, 0.18)";
-        octx.strokeStyle = "rgba(94, 234, 212, 0.9)";
-        octx.lineWidth = Math.max(1.5, ow * 0.0025);
-        for (const poly of polys) {
+        if (scanning) {
+          // Lightweight overlay: oval + progress ring only
+          octx.shadowColor = "rgba(94, 234, 212, 0.55)";
+          octx.shadowBlur = Math.max(12, ow * 0.03);
+          octx.strokeStyle = "rgba(94, 234, 212, 0.95)";
+          octx.lineWidth = Math.max(2.5, ow * 0.005);
           octx.beginPath();
-          poly.forEach((p, i) => (i === 0 ? octx.moveTo(p.x, p.y) : octx.lineTo(p.x, p.y)));
-          octx.closePath();
-          octx.fill();
+          octx.ellipse(oval.cx, oval.cy, oval.rx, oval.ry, 0, 0, Math.PI * 2);
           octx.stroke();
-        }
+          octx.shadowBlur = 0;
+          drawProgressRing(octx, oval.cx, oval.cy, oval.rx, oval.ry, progressRef.current);
 
-        frameCtx.drawImage(video, 0, 0, sw, sh);
-        const samplePolys = namedRoiPolygons(face, sw, sh);
-        const sample = sampleRoiRgb(frameCtx, maskCtx, Object.values(samplePolys), samplePolys);
-        if (sample) {
-          fused = sample.fused;
-          regionRgb = sample.regions;
-        }
+          frameCtx.drawImage(video, 0, 0, sw, sh);
+          const samplePolys = namedRoiPolygons(face, sw, sh);
+          const sample = sampleRoiRgb(frameCtx, maskCtx, Object.values(samplePolys));
+          if (sample) fused = sample.fused;
+        } else {
+          const named = namedRoiPolygons(face, ow, oh);
+          const polys = Object.values(named);
+          const qProbe = assessQuality({
+            landmarks: face,
+            fusedRgb: null,
+            regionRgb: {},
+            frame: null,
+            sampleW: sw,
+            sampleH: sh,
+            now,
+          });
+          octx.strokeStyle = guideColor(qProbe);
+          octx.lineWidth = Math.max(2, ow * 0.004);
+          octx.beginPath();
+          octx.ellipse(oval.cx, oval.cy, oval.rx, oval.ry, 0, 0, Math.PI * 2);
+          octx.stroke();
 
-        const q = assessQuality({
-          landmarks: face,
-          fusedRgb: fused,
-          regionRgb,
-          frame: frameCtx,
-          sampleW: sw,
-          sampleH: sh,
-          now,
-        });
-        setQuality(q);
-      } else {
+          octx.fillStyle = "rgba(94, 234, 212, 0.18)";
+          octx.strokeStyle = "rgba(94, 234, 212, 0.9)";
+          octx.lineWidth = Math.max(1.5, ow * 0.0025);
+          for (const poly of polys) {
+            octx.beginPath();
+            poly.forEach((p, i) => (i === 0 ? octx.moveTo(p.x, p.y) : octx.lineTo(p.x, p.y)));
+            octx.closePath();
+            octx.fill();
+            octx.stroke();
+          }
+
+          frameCtx.drawImage(video, 0, 0, sw, sh);
+          const samplePolys = namedRoiPolygons(face, sw, sh);
+          const sample = sampleRoiRgb(
+            frameCtx,
+            maskCtx,
+            Object.values(samplePolys),
+            samplePolys,
+          );
+          const regionRgb = sample?.regions ?? {};
+          if (sample) fused = sample.fused;
+
+          const q = assessQuality({
+            landmarks: face,
+            fusedRgb: fused,
+            regionRgb,
+            frame: frameCtx,
+            sampleW: sw,
+            sampleH: sh,
+            now,
+          });
+          setQuality(q);
+        }
+      } else if (!scanning) {
         octx.strokeStyle = "rgba(255,255,255,0.4)";
         octx.lineWidth = Math.max(2, ow * 0.004);
         octx.beginPath();
@@ -424,7 +477,7 @@ export default function ScanClient({
         setQuality({ ...emptyQ, tip: "Move into the frame until your face is detected." });
       }
 
-      if (scanningRef.current) {
+      if (scanning) {
         const s = samplesRef.current;
         s.start ??= now;
         if (fused) {
@@ -434,10 +487,22 @@ export default function ScanClient({
           s.missed++;
         }
         const elapsed = (now - s.start) / 1000;
-        const target = extendingRef.current ? MAX_SECONDS : TARGET_SECONDS;
-        setSecondsLeft(Math.max(0, Math.ceil(target - elapsed)));
+        const bySamples = s.t.length / TARGET_SAMPLES;
+        const byTime = elapsed / (extendingRef.current ? MAX_SECONDS : TARGET_SECONDS);
+        const prog = Math.min(1, Math.max(bySamples, byTime * 0.5));
+        progressRef.current = prog;
 
-        if (elapsed >= 10 && s.t.length > 80) {
+        // Throttle React HUD updates (~4 Hz)
+        if (now - lastHudRef.current > 250) {
+          lastHudRef.current = now;
+          setSampleCount(s.t.length);
+          setScanProgress(prog);
+          const target = extendingRef.current ? MAX_SECONDS : TARGET_SECONDS;
+          setSecondsLeft(Math.max(0, Math.ceil(target - elapsed)));
+        }
+
+        if (elapsed >= 10 && s.t.length > 60 && now - lastLiveHrRef.current > 2000) {
+          lastLiveHrRef.current = now;
           const bpm = liveHrEstimate(
             s.t.map((t) => t - s.t[0]),
             s.rgb,
@@ -445,16 +510,18 @@ export default function ScanClient({
           if (bpm !== null) setLiveBpm(bpm);
         }
 
-        const span = s.t.length >= 2 ? (s.t[s.t.length - 1] - s.t[0]) / 1000 : 0;
-        const fps = span > 0.5 ? s.t.length / span : 30;
-        // Extend early if fps is low
-        if (elapsed >= 20 && fps < 12 && !extendingRef.current) {
+        // Extend early if short on samples
+        if (elapsed >= 25 && s.t.length < TARGET_SAMPLES && !extendingRef.current) {
           extendingRef.current = true;
           setExtending(true);
         }
 
+        if (s.t.length >= TARGET_SAMPLES && elapsed >= 20) {
+          void submit();
+          return;
+        }
         if (elapsed >= TARGET_SECONDS && !extendingRef.current) {
-          if (s.t.length >= MIN_SAMPLES) {
+          if (s.t.length >= TARGET_SAMPLES) {
             void submit();
             return;
           }
@@ -476,8 +543,13 @@ export default function ScanClient({
     extendingRef.current = false;
     setExtending(false);
     setLiveBpm(null);
+    setSampleCount(0);
+    setScanProgress(0);
+    progressRef.current = 0;
+    lastLiveHrRef.current = 0;
     scanningRef.current = true;
     setPhase("scanning");
+    syncOverlaySize(true);
     await requestWakeLock();
     await requestFullscreen();
   }
@@ -488,15 +560,15 @@ export default function ScanClient({
     const s = samplesRef.current;
     const total = s.t.length + s.missed;
     const faceFrac = total ? s.t.length / total : 0;
-    if (s.missed > 0.2 * total)
+    if (s.missed > 0.35 * total)
       return fail(
         "Your face was not visible for much of the scan. Keep your face centred and try again.",
       );
     const span = s.t.length >= 2 ? (s.t[s.t.length - 1] - s.t[0]) / 1000 : 0;
     const fps = span > 0 ? s.t.length / span : 0;
-    if (s.t.length < MIN_SAMPLES || fps < 8)
+    if (s.t.length < MIN_SAMPLES)
       return fail(
-        `This device captured only ${fps.toFixed(1)} frames/s (need ≥8). Close other tabs/apps and retry, or try another device.`,
+        `Not enough signal samples (${s.t.length}). Close other tabs, set brightness to max, hold still, and try again.`,
       );
     try {
       const token = await getToken();
@@ -520,8 +592,7 @@ export default function ScanClient({
             ? "The scan data was not usable. Please try again."
             : "Server error. Please try again in a moment.",
         );
-      const body = (await res.json()) as HrResult;
-      setResult(body);
+      setResult((await res.json()) as HrResult);
       setPhase("result");
       try {
         navigator.vibrate?.(40);
@@ -571,8 +642,6 @@ export default function ScanClient({
 
   const showCamera =
     phase === "loading" || phase === "ready" || phase === "scanning" || phase === "consent";
-  const duration = extending ? MAX_SECONDS : TARGET_SECONDS;
-  const progress = ((duration - secondsLeft) / duration) * 100;
   const startOk = canStartScan(quality, eyewearOverride) && brightOk;
   const mirror = facing === "user";
   const illuminate = phase === "scanning" && facing === "user";
@@ -588,8 +657,8 @@ export default function ScanClient({
             </h1>
             <div className="fh-panel" style={{ marginTop: "1.1rem", padding: "1rem 1.05rem" }}>
               <p style={{ margin: 0, color: "var(--muted)", lineHeight: 1.5 }}>
-                Sit upright facing the screen. Set brightness to maximum — bright screen edges help
-                light your face. Stay still until the timer ends.
+                Sit upright facing the screen. Set brightness to maximum — bright edges help light
+                your face. Stay still; we may continue a bit longer on slower phones.
               </p>
             </div>
             <label className="fh-check fh-panel" style={{ marginTop: "0.75rem", padding: "1rem" }}>
@@ -628,7 +697,7 @@ export default function ScanClient({
             <h2 className="fh-title" style={{ fontSize: "1.7rem" }}>
               {phase === "scanning"
                 ? extending
-                  ? "A few more seconds…"
+                  ? "Still capturing… hold still"
                   : `${secondsLeft}s left`
                 : "Ready when you are"}
             </h2>
@@ -660,27 +729,45 @@ export default function ScanClient({
                 Face the screen. Bright edges help light your face.
               </p>
             )}
-            {phase === "scanning" && liveBpm !== null && (
-              <p className="fh-live-bpm" aria-live="polite">
-                Live estimate · ~{liveBpm} BPM
-              </p>
+            {phase === "scanning" && (
+              <>
+                <p className="fh-scan-status" aria-live="polite">
+                  Analysing skin colour changes…
+                </p>
+                {liveBpm !== null && (
+                  <p className="fh-live-bpm">Live estimate · ~{liveBpm} BPM</p>
+                )}
+                <div className="fh-scan-meters">
+                  <div>
+                    <span>Signal samples</span>
+                    <strong>
+                      {sampleCount}/{TARGET_SAMPLES}
+                    </strong>
+                  </div>
+                  <div className="fh-scan-bar" aria-hidden>
+                    <span style={{ width: `${scanProgress * 100}%` }} />
+                  </div>
+                </div>
+              </>
             )}
-            <ul className="fh-checklist" aria-label="Scan readiness">
-              {(
-                [
-                  ["Face", quality.face],
-                  ["Framing", quality.framing],
-                  ["Lighting", quality.lighting],
-                  ["Still", quality.stillness],
-                  ["Eyewear", quality.eyewear || eyewearOverride],
-                ] as const
-              ).map(([label, ok]) => (
-                <li key={label} className={ok ? "ok" : "bad"}>
-                  <span aria-hidden>{ok ? "●" : "○"}</span> {label}
-                </li>
-              ))}
-            </ul>
-            {quality.tip && (
+            {phase !== "scanning" && (
+              <ul className="fh-checklist" aria-label="Scan readiness">
+                {(
+                  [
+                    ["Face", quality.face],
+                    ["Framing", quality.framing],
+                    ["Lighting", quality.lighting],
+                    ["Still", quality.stillness],
+                    ["Eyewear", quality.eyewear || eyewearOverride],
+                  ] as const
+                ).map(([label, ok]) => (
+                  <li key={label} className={ok ? "ok" : "bad"}>
+                    <span aria-hidden>{ok ? "●" : "○"}</span> {label}
+                  </li>
+                ))}
+              </ul>
+            )}
+            {quality.tip && phase === "ready" && (
               <p style={{ marginTop: "0.6rem", color: "var(--muted)", fontSize: "0.88rem" }}>
                 {quality.tip}
               </p>
@@ -703,11 +790,6 @@ export default function ScanClient({
               >
                 Start scan
               </button>
-            )}
-            {phase === "scanning" && (
-              <div className="fh-progress" aria-hidden>
-                <span style={{ width: `${progress}%` }} />
-              </div>
             )}
           </div>
         )}
@@ -745,9 +827,10 @@ export default function ScanClient({
                   <div className="fh-conf-bar" aria-hidden>
                     <span style={{ width: `${result.confidence}%` }} />
                   </div>
-                  <span className={`fh-tag${result.confidence_label === "Low" ? " fh-tag-warn" : ""}`}>
+                  <span
+                    className={`fh-tag${result.confidence_label === "Low" ? " fh-tag-warn" : ""}`}
+                  >
                     Confidence · {result.confidence_label} ({result.confidence})
-                    {result.method ? ` · ${result.method}` : ""}
                   </span>
                   <p style={{ margin: "0.45rem 0 0", fontSize: "0.82rem", color: "var(--muted)" }}>
                     {result.confidence_reason}
@@ -835,7 +918,9 @@ export default function ScanClient({
                     checked={traceConsent}
                     onChange={(e) => setTraceConsent(e.target.checked)}
                   />
-                  <span>Share anonymous colour-signal data to improve FaceHealth (off by default)</span>
+                  <span>
+                    Share anonymous colour-signal data to improve FaceHealth (off by default)
+                  </span>
                 </label>
                 <button
                   className="fh-btn fh-btn-primary"
@@ -881,10 +966,11 @@ export default function ScanClient({
       <div className={showCamera ? undefined : "hidden"}>
         <div
           ref={camWrapRef}
-          className={`fh-cam${mirror ? " fh-cam-mirror" : " fh-cam-nomirror"}${illuminate ? " fh-cam-lit" : ""}`}
+          className={`fh-cam${mirror ? " fh-cam-mirror" : " fh-cam-nomirror"}${illuminate ? " fh-cam-lit" : ""}${phase === "scanning" ? " fh-cam-scanning" : ""}`}
         >
           <video ref={videoRef} playsInline muted />
           <canvas ref={overlayRef} />
+          {phase === "scanning" && <div className="fh-scan-sweep" aria-hidden />}
           {showCamera && (
             <div className="fh-cam-hud">
               {phase === "loading" && (
@@ -897,24 +983,15 @@ export default function ScanClient({
                 <span>{quality.face ? "Face in frame" : "Looking for face…"}</span>
               )}
               {phase === "scanning" && (
-                <div>
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem" }}>
-                    <span>
-                      {quality.face
-                        ? liveBpm !== null
-                          ? `~${liveBpm} BPM`
-                          : "Recording pulse signal"
-                        : "Face lost"}
-                    </span>
-                    <strong>{secondsLeft}s</strong>
-                  </div>
-                  <div className="fh-progress">
-                    <span style={{ width: `${progress}%` }} />
-                  </div>
+                <div className="fh-cam-hud-scan">
+                  <span className="fh-chip">Capturing signal</span>
+                  <span className="fh-chip">{sampleCount} samples</span>
+                  {liveBpm !== null && <span className="fh-chip">~{liveBpm} BPM</span>}
+                  <strong className="fh-cam-timer">{secondsLeft}s</strong>
                 </div>
               )}
               {phase === "consent" && (
-                <span>Camera preview appears here after you enable access</span>
+                <span>Your camera view appears here after you enable access</span>
               )}
             </div>
           )}
